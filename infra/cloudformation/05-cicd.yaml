@@ -1,28 +1,45 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Calorie Tracker - CI/CD (Grade 9): an S3-sourced CodePipeline that runs a
-  CodeBuild project to build all three Docker images, push them to ECR, and force
-  a new deployment of the ECS services.
+  Calorie Tracker - CI/CD: a GitHub-sourced CodePipeline that runs a CodeBuild
+  project to build the four Docker images, push them to ECR, and force a new
+  deployment of every ECS service.
 
-  Roles: by default this template CREATES dedicated CodeBuild/CodePipeline roles
-  (run on a personal account with --capabilities CAPABILITY_NAMED_IAM). In AWS
-  Academy (no role creation), pass ServiceRoleArn=<LabRole ARN> to reuse LabRole
-  for both - it only works if LabRole is trusted by codebuild & codepipeline.
+  Source: AWS CodeStar Connections (CodeConnections) to a private GitHub
+  repository. Create the connection ONCE via the AWS console
+  (CodePipeline -> Settings -> Connections -> Create connection -> GitHub),
+  authorize the AWS Connector for GitHub for the repo, then pass its ARN here
+  via the GitHubConnectionArn parameter. Every push to the chosen branch
+  triggers the pipeline automatically.
+
+  Roles: this template CREATES dedicated CodeBuild + CodePipeline roles
+  (run with --capabilities CAPABILITY_NAMED_IAM).
 
 Parameters:
   ProjectName:
     Type: String
     Default: calorietracker
-  ServiceRoleArn:
-    Type: String
-    Default: ''
-    Description: If set, reuse this role for CodeBuild + CodePipeline (e.g. LabRole). Blank = create roles.
 
-Conditions:
-  CreateRoles: !Equals [!Ref ServiceRoleArn, '']
+  GitHubConnectionArn:
+    Type: String
+    Description: >
+      ARN of the GitHub CodeStar/CodeConnections connection (Available state).
+      Looks like arn:aws:codeconnections:us-east-1:<acct>:connection/<uuid>.
+    AllowedPattern: '^arn:aws:codeconnections:.+:connection/.+$|^arn:aws:codestar-connections:.+:connection/.+$'
+
+  GitHubFullRepo:
+    Type: String
+    Description: 'GitHub owner/repo (e.g. mariusexample/calorie_tracker).'
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: Branch to track. Every push here triggers the pipeline.
 
 Resources:
 
+  # Artifact store used between Source -> Build stages. Short retention since
+  # nothing downstream of the pipeline reads it.
   ArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -30,29 +47,9 @@ Resources:
         Rules:
           - { Id: expire, Status: Enabled, ExpirationInDays: 7 }
 
-  SourceBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      VersioningConfiguration:
-        Status: Enabled   # required for S3 as a CodePipeline source
-      LifecycleConfiguration:
-        Rules:
-          # Versioning is mandatory for S3-as-CodePipeline-source, but without
-          # a rule old versions would accumulate forever. Drop them after 30
-          # days and clean up multipart upload junk after 7.
-          - Id: expire-noncurrent
-            Status: Enabled
-            NoncurrentVersionExpiration:
-              NoncurrentDays: 30
-          - Id: abort-multipart
-            Status: Enabled
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 7
-
-  # ---------------- IAM (created only when ServiceRoleArn is blank) ----------------
+  # ---------------- IAM ----------------
   CodeBuildRole:
     Type: AWS::IAM::Role
-    Condition: CreateRoles
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -91,7 +88,6 @@ Resources:
 
   CodePipelineRole:
     Type: AWS::IAM::Role
-    Condition: CreateRoles
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -109,18 +105,20 @@ Resources:
                 Resource:
                   - !GetAtt ArtifactBucket.Arn
                   - !Sub '${ArtifactBucket.Arn}/*'
-                  - !GetAtt SourceBucket.Arn
-                  - !Sub '${SourceBucket.Arn}/*'
               - Effect: Allow
                 Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
                 Resource: '*'
+              # Required so CodePipeline can pull from the GitHub connection
+              - Effect: Allow
+                Action: codestar-connections:UseConnection
+                Resource: !Ref GitHubConnectionArn
 
   # ---------------- CodeBuild ----------------
   BuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: !Sub '${ProjectName}-build'
-      ServiceRole: !If [CreateRoles, !GetAtt CodeBuildRole.Arn, !Ref ServiceRoleArn]
+      ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts: { Type: CODEPIPELINE }
       Environment:
         Type: LINUX_CONTAINER
@@ -171,19 +169,29 @@ Resources:
     Type: AWS::CodePipeline::Pipeline
     Properties:
       Name: !Sub '${ProjectName}-pipeline'
-      RoleArn: !If [CreateRoles, !GetAtt CodePipelineRole.Arn, !Ref ServiceRoleArn]
+      RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
         Type: S3
         Location: !Ref ArtifactBucket
       Stages:
         - Name: Source
           Actions:
-            - Name: S3Source
-              ActionTypeId: { Category: Source, Owner: AWS, Provider: S3, Version: '1' }
+            - Name: GitHubSource
+              # CodeStar Connections (a.k.a. CodeConnections) provider talks to
+              # GitHub via the OAuth app installed once at connection creation.
+              # DetectChanges=true means GitHub will push CloudWatch events to
+              # CodePipeline on every commit to GitHubBranch -> instant trigger.
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
               Configuration:
-                S3Bucket: !Ref SourceBucket
-                S3ObjectKey: source.zip
-                PollForSourceChanges: 'true'
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref GitHubFullRepo
+                BranchName: !Ref GitHubBranch
+                DetectChanges: 'true'
+                OutputArtifactFormat: CODE_ZIP
               OutputArtifacts: [{ Name: SourceOutput }]
         - Name: BuildAndDeploy
           Actions:
@@ -193,8 +201,11 @@ Resources:
               InputArtifacts: [{ Name: SourceOutput }]
 
 Outputs:
-  SourceBucketName:
-    Description: Upload source.zip here to trigger the pipeline
-    Value: !Ref SourceBucket
   PipelineName:
+    Description: CodePipeline name. Triggered automatically on every push to the configured branch.
     Value: !Ref Pipeline
+  PipelineConsoleUrl:
+    Description: Click to watch pipeline runs in the AWS console.
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${Pipeline}/view'
+  TrackedRepo:
+    Value: !Sub 'github.com/${GitHubFullRepo}@${GitHubBranch}'
