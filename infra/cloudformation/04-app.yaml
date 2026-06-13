@@ -19,7 +19,15 @@ Parameters:
     Type: String
     Default: mock
     AllowedValues: [mock, bedrock]
-    Description: Bedrock is usually unavailable in Academy; keep 'mock' there.
+    Description: Set to 'bedrock' to use the real LLM via AWS Bedrock.
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-3-5-sonnet-20240620-v1:0
+    Description: >
+      Bedrock model id. Format depends on region:
+        us-east-1 / us-west-2: us.anthropic.claude-3-5-sonnet-20240620-v1:0
+        eu-central-1:          eu.anthropic.claude-3-5-sonnet-20240620-v1:0
+      Only used when AiProvider=bedrock.
   LabRoleArn:
     Type: String
     Default: ''
@@ -29,6 +37,7 @@ Parameters:
 
 Conditions:
   UseDefaultLabRole: !Equals [!Ref LabRoleArn, '']
+  UseBedrock: !Equals [!Ref AiProvider, bedrock]
 
 Resources:
 
@@ -202,10 +211,14 @@ Resources:
           PortMappings:
             - { ContainerPort: 8082 }
           Environment:
-            - { Name: SPRING_PROFILES_ACTIVE, Value: cognito }
+            # Activate 'bedrock' profile only when AiProvider=bedrock so the
+            # Spring AI Bedrock auto-config doesn't try to connect under mock.
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: !If [UseBedrock, 'cognito,bedrock', 'cognito']
             - { Name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE, Value: 'http://eureka.calorietracker.local:8761/eureka/' }
             - { Name: CALORIETRACKER_AI_PROVIDER, Value: !Ref AiProvider }
             - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            - { Name: BEDROCK_MODEL_ID, Value: !Ref BedrockModelId }
             - Name: COGNITO_ISSUER_URI
               Value:
                 Fn::ImportValue: !Sub '${ProjectName}-IssuerUri'

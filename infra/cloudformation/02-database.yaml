@@ -10,8 +10,14 @@ Parameters:
     Default: calorietracker
   DBEngineVersion:
     Type: String
-    Default: '16.4'
-    Description: PostgreSQL version. Adjust if not available in your region.
+    Default: '16.9'
+    Description: >
+      PostgreSQL version. AWS rotates which patch versions are valid; if this
+      one is rejected, find a current one with:
+        aws rds describe-db-engine-versions --engine postgres \
+          --query 'DBEngineVersions[?starts_with(EngineVersion, `16.`)].EngineVersion' \
+          --output text
+      then deploy with --parameter-overrides DBEngineVersion=<value>.
   DBInstanceClass:
     Type: String
     Default: db.t3.micro
