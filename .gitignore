@@ -1,0 +1,31 @@
+# Build output
+target/
+*.jar
+!**/src/main/**/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+
+# Logs / env
+*.log
+.env
+.env.*
+
+# Local-only JWT signing key 
+local-private.pem
+
+# AWS credentials / config
+.aws/
+aws.json
+
+# Claude / agent local state
+.claude/
+

@@ -1,0 +1,41 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          # We define explicit routes below rather than auto-mapping every
+          # service. Explicit routes are clearer and safer to expose publicly.
+          enabled: false
+      routes:
+        # More-specific /api/ai/** routes to the dedicated AI service (Bedrock host).
+        # Order matters: gateway matches top-down, first match wins.
+        - id: ai-service
+          uri: lb://ai-service
+          predicates:
+            - Path=/api/ai/**
+        - id: backend-core
+          # lb:// = resolve 'backend-core' via Eureka + client-side load balancer
+          uri: lb://backend-core
+          predicates:
+            - Path=/api/**
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Deliberately NOT exposing `gateway` here - that endpoint enumerates
+        # routes (lb://backend-core, lb://ai-service, ...) which is unnecessary
+        # internal detail to surface to unauthenticated callers.
+        include: health,info

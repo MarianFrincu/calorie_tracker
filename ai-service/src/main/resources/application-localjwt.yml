@@ -1,0 +1,8 @@
+# Activated with: SPRING_PROFILES_ACTIVE=localjwt
+# Validates JWTs against the bundled RSA public key (same as backend-core / gateway).
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          public-key-location: classpath:keys/local-public.pem

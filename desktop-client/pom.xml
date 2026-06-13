@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.calorietracker</groupId>
+    <artifactId>desktop-client</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>desktop-client</name>
+    <description>JavaFX desktop client for the Calorie Tracker (REST only, no DB)</description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <javafx.version>23.0.1</javafx.version>
+        <jackson.version>2.17.2</jackson.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <version>${javafx.version}</version>
+        </dependency>
+        <!-- JSON (de)serialization for the REST calls -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+            <!-- Run with: mvn -f desktop-client/pom.xml javafx:run -->
+            <plugin>
+                <groupId>org.openjfx</groupId>
+                <artifactId>javafx-maven-plugin</artifactId>
+                <version>0.0.8</version>
+                <configuration>
+                    <mainClass>com.calorietracker.desktop.CalorieTrackerApp</mainClass>
+                    <!-- Silences the JDK 24 native-access + sun.misc.Unsafe warnings emitted
+                         by JavaFX/Marlin on startup. They're noisy but harmless. -->
+                    <options>
+                        <option>--enable-native-access=javafx.graphics</option>
+                        <option>--sun-misc-unsafe-memory-access=allow</option>
+                    </options>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

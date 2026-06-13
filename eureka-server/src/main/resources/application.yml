@@ -1,0 +1,28 @@
+server:
+  # 8761 is the conventional Eureka port. Clients default to looking here.
+  port: 8761
+
+spring:
+  application:
+    name: eureka-server
+
+eureka:
+  instance:
+    hostname: localhost
+  client:
+    # A standalone registry must NOT try to register with or fetch from itself.
+    # (These become 'true' only if you run a clustered/peer-aware Eureka.)
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+  server:
+    # Disable self-preservation locally so dead instances are evicted quickly
+    # during development. In production you typically leave this ON (true).
+    enable-self-preservation: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

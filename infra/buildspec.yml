@@ -1,0 +1,33 @@
+# Reference buildspec (the pipeline in 05-cicd.yaml uses an inline copy of this).
+# Builds all three images, pushes to ECR, and forces ECS redeployments.
+# Expects env vars: AWS_DEFAULT_REGION, ACCOUNT_ID, PROJECT, ECR.
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      java: corretto21
+  pre_build:
+    commands:
+      - echo Running unit tests on every Maven module...
+      - |
+        for svc in eureka-server api-gateway backend-core ai-service; do
+          echo "Testing $svc...";
+          (cd $svc && mvn -B -q test);
+        done
+      - echo Logging in to ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
+  build:
+    commands:
+      - |
+        for svc in eureka-server api-gateway backend-core ai-service; do
+          echo "Building $svc...";
+          docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc;
+          docker push $ECR/$PROJECT-$svc:latest;
+        done
+  post_build:
+    commands:
+      - echo Forcing new ECS deployments...
+      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-eureka  --force-new-deployment
+      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-gateway --force-new-deployment
+      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-core    --force-new-deployment
+      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-ai      --force-new-deployment

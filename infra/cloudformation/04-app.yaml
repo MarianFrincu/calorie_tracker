@@ -1,0 +1,330 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Calorie Tracker - Application: ECS Fargate cluster running eureka-server,
+  api-gateway and backend-core, fronted by an Application Load Balancer, with
+  Eureka discovery via Cloud Map. Imports network/db/cognito from prior stacks.
+  Uses the AWS Academy 'LabRole' for task execution + task roles.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: calorietracker
+  ImageTag:
+    Type: String
+    Default: latest
+  DesiredCount:
+    Type: Number
+    Default: 1
+  AiProvider:
+    Type: String
+    Default: mock
+    AllowedValues: [mock, bedrock]
+    Description: Bedrock is usually unavailable in Academy; keep 'mock' there.
+  LabRoleArn:
+    Type: String
+    Default: ''
+    Description: >
+      ARN of the Academy LabRole for ECS execution + task role. Leave blank to
+      use arn:aws:iam::<account>:role/LabRole.
+
+Conditions:
+  UseDefaultLabRole: !Equals [!Ref LabRoleArn, '']
+
+Resources:
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProjectName}-cluster'
+
+  # ---------------- Logs ----------------
+  EurekaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}/eureka'
+      RetentionInDays: 7
+  GatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}/gateway'
+      RetentionInDays: 7
+  CoreLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}/core'
+      RetentionInDays: 7
+  AiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}/ai'
+      RetentionInDays: 7
+
+  # ---------------- Load balancer ----------------
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${ProjectName}-alb'
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet1Id'
+        - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet2Id'
+      SecurityGroups:
+        - Fn::ImportValue: !Sub '${ProjectName}-AlbSgId'
+
+  GatewayTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${ProjectName}-gw-tg'
+      VpcId:
+        Fn::ImportValue: !Sub '${ProjectName}-VpcId'
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /actuator/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher: { HttpCode: '200' }
+      TargetGroupAttributes:
+        - { Key: deregistration_delay.timeout_seconds, Value: '30' }
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref GatewayTargetGroup
+
+  # ---------------- Service discovery (Eureka) ----------------
+  EurekaDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: eureka
+      NamespaceId:
+        Fn::ImportValue: !Sub '${ProjectName}-NamespaceId'
+      DnsConfig:
+        DnsRecords:
+          - { Type: A, TTL: 15 }
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  # ---------------- Task definitions ----------------
+  EurekaTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-eureka'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      TaskRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      ContainerDefinitions:
+        - Name: eureka
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-eureka-server:${ImageTag}'
+          Essential: true
+          PortMappings:
+            - { ContainerPort: 8761 }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref EurekaLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: eureka
+
+  CoreTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-core'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      TaskRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      ContainerDefinitions:
+        - Name: backend-core
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-backend-core:${ImageTag}'
+          Essential: true
+          PortMappings:
+            - { ContainerPort: 8081 }
+          Environment:
+            - { Name: SPRING_PROFILES_ACTIVE, Value: cognito }
+            - { Name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE, Value: 'http://eureka.calorietracker.local:8761/eureka/' }
+            - { Name: CALORIETRACKER_AI_PROVIDER, Value: !Ref AiProvider }
+            - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            - Name: COGNITO_ISSUER_URI
+              Value:
+                Fn::ImportValue: !Sub '${ProjectName}-IssuerUri'
+            - Name: SPRING_DATASOURCE_URL
+              Value: !Sub
+                - 'jdbc:postgresql://${Endpoint}:5432/calorietracker'
+                - Endpoint:
+                    Fn::ImportValue: !Sub '${ProjectName}-DBEndpoint'
+          Secrets:
+            - Name: SPRING_DATASOURCE_USERNAME
+              ValueFrom: !Sub
+                - '${Arn}:username::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${ProjectName}-DBSecretArn'
+            - Name: SPRING_DATASOURCE_PASSWORD
+              ValueFrom: !Sub
+                - '${Arn}:password::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${ProjectName}-DBSecretArn'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CoreLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: core
+
+  AiTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-ai'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      TaskRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      ContainerDefinitions:
+        - Name: ai-service
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-ai-service:${ImageTag}'
+          Essential: true
+          PortMappings:
+            - { ContainerPort: 8082 }
+          Environment:
+            - { Name: SPRING_PROFILES_ACTIVE, Value: cognito }
+            - { Name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE, Value: 'http://eureka.calorietracker.local:8761/eureka/' }
+            - { Name: CALORIETRACKER_AI_PROVIDER, Value: !Ref AiProvider }
+            - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            - Name: COGNITO_ISSUER_URI
+              Value:
+                Fn::ImportValue: !Sub '${ProjectName}-IssuerUri'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref AiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ai
+
+  GatewayTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-gateway'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      TaskRoleArn: !If [UseDefaultLabRole, !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole', !Ref LabRoleArn]
+      ContainerDefinitions:
+        - Name: api-gateway
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-api-gateway:${ImageTag}'
+          Essential: true
+          PortMappings:
+            - { ContainerPort: 8080 }
+          Environment:
+            - { Name: SPRING_PROFILES_ACTIVE, Value: cognito }
+            - { Name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE, Value: 'http://eureka.calorietracker.local:8761/eureka/' }
+            - Name: COGNITO_ISSUER_URI
+              Value:
+                Fn::ImportValue: !Sub '${ProjectName}-IssuerUri'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref GatewayLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: gateway
+
+  # ---------------- Services ----------------
+  EurekaService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-eureka'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref EurekaTaskDef
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet1Id'
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet2Id'
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${ProjectName}-EcsSgId'
+      ServiceRegistries:
+        - RegistryArn: !GetAtt EurekaDiscovery.Arn
+
+  CoreService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-core'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref CoreTaskDef
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet1Id'
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet2Id'
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${ProjectName}-EcsSgId'
+
+  AiService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-ai'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref AiTaskDef
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet1Id'
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet2Id'
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${ProjectName}-EcsSgId'
+
+  GatewayService:
+    Type: AWS::ECS::Service
+    DependsOn: HttpListener
+    Properties:
+      ServiceName: !Sub '${ProjectName}-gateway'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref GatewayTaskDef
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet1Id'
+            - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet2Id'
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${ProjectName}-EcsSgId'
+      LoadBalancers:
+        - TargetGroupArn: !Ref GatewayTargetGroup
+          ContainerName: api-gateway
+          ContainerPort: 8080
+
+Outputs:
+  ApiUrl:
+    Description: Public base URL of the platform (through the ALB -> gateway)
+    Value: !Sub 'http://${LoadBalancer.DNSName}'
+  ClusterName:
+    Value: !Ref Cluster

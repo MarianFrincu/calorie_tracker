@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Calorie Tracker - CI/CD (Grade 9): an S3-sourced CodePipeline that runs a
+  CodeBuild project to build all three Docker images, push them to ECR, and force
+  a new deployment of the ECS services.
+
+  Roles: by default this template CREATES dedicated CodeBuild/CodePipeline roles
+  (run on a personal account with --capabilities CAPABILITY_NAMED_IAM). In AWS
+  Academy (no role creation), pass ServiceRoleArn=<LabRole ARN> to reuse LabRole
+  for both - it only works if LabRole is trusted by codebuild & codepipeline.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: calorietracker
+  ServiceRoleArn:
+    Type: String
+    Default: ''
+    Description: If set, reuse this role for CodeBuild + CodePipeline (e.g. LabRole). Blank = create roles.
+
+Conditions:
+  CreateRoles: !Equals [!Ref ServiceRoleArn, '']
+
+Resources:
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire, Status: Enabled, ExpirationInDays: 7 }
+
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled   # required for S3 as a CodePipeline source
+      LifecycleConfiguration:
+        Rules:
+          # Versioning is mandatory for S3-as-CodePipeline-source, but without
+          # a rule old versions would accumulate forever. Drop them after 30
+          # days and clean up multipart upload junk after 7.
+          - Id: expire-noncurrent
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          - Id: abort-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  # ---------------- IAM (created only when ServiceRoleArn is blank) ----------------
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Condition: CreateRoles
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: build
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:GetAuthorizationToken]
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-*'
+              - Effect: Allow
+                Action: [ecs:UpdateService, ecs:DescribeServices]
+                Resource: '*'
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:GetBucketVersioning]
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub '${ArtifactBucket.Arn}/*'
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Condition: CreateRoles
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codepipeline.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: pipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:GetBucketVersioning, s3:GetObjectVersion]
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub '${ArtifactBucket.Arn}/*'
+                  - !GetAtt SourceBucket.Arn
+                  - !Sub '${SourceBucket.Arn}/*'
+              - Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
+                Resource: '*'
+
+  # ---------------- CodeBuild ----------------
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${ProjectName}-build'
+      ServiceRole: !If [CreateRoles, !GetAtt CodeBuildRole.Arn, !Ref ServiceRoleArn]
+      Artifacts: { Type: CODEPIPELINE }
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true   # needed for 'docker build'
+        EnvironmentVariables:
+          - { Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region }
+          - { Name: ACCOUNT_ID, Value: !Ref AWS::AccountId }
+          - { Name: PROJECT, Value: !Ref ProjectName }
+          - { Name: ECR, Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com' }
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                java: corretto21
+            pre_build:
+              commands:
+                - echo Running unit tests on every Maven module...
+                - |
+                  for svc in eureka-server api-gateway backend-core ai-service; do
+                    echo "Testing $svc...";
+                    (cd $svc && mvn -B -q test);
+                  done
+                - echo Logging in to ECR...
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
+            build:
+              commands:
+                - |
+                  for svc in eureka-server api-gateway backend-core ai-service; do
+                    echo "Building $svc...";
+                    docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc;
+                    docker push $ECR/$PROJECT-$svc:latest;
+                  done
+            post_build:
+              commands:
+                - echo Forcing new ECS deployments...
+                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-eureka  --force-new-deployment
+                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-gateway --force-new-deployment
+                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-core    --force-new-deployment
+                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-ai      --force-new-deployment
+
+  # ---------------- CodePipeline ----------------
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${ProjectName}-pipeline'
+      RoleArn: !If [CreateRoles, !GetAtt CodePipelineRole.Arn, !Ref ServiceRoleArn]
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: S3Source
+              ActionTypeId: { Category: Source, Owner: AWS, Provider: S3, Version: '1' }
+              Configuration:
+                S3Bucket: !Ref SourceBucket
+                S3ObjectKey: source.zip
+                PollForSourceChanges: 'true'
+              OutputArtifacts: [{ Name: SourceOutput }]
+        - Name: BuildAndDeploy
+          Actions:
+            - Name: Build
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: '1' }
+              Configuration: { ProjectName: !Ref BuildProject }
+              InputArtifacts: [{ Name: SourceOutput }]
+
+Outputs:
+  SourceBucketName:
+    Description: Upload source.zip here to trigger the pipeline
+    Value: !Ref SourceBucket
+  PipelineName:
+    Value: !Ref Pipeline

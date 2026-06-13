@@ -1,0 +1,37 @@
+server:
+  port: 8082
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+
+spring:
+  application:
+    name: ai-service
+  ai:
+    # Chat model auto-config OFF by default so the app boots with NO AWS access.
+    # The 'bedrock' profile turns it back on (see application-bedrock.yml).
+    model:
+      chat: none
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+# AI provider switch: 'mock' (offline default) or 'bedrock'.
+calorietracker:
+  ai:
+    provider: ${CALORIETRACKER_AI_PROVIDER:mock}

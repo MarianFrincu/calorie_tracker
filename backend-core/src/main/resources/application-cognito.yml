@@ -1,0 +1,15 @@
+# Activated with: SPRING_PROFILES_ACTIVE=cognito
+# Production security: validate JWTs issued by AWS Cognito.
+#
+# COGNITO_ISSUER_URI looks like:
+#   https://cognito-idp.<region>.amazonaws.com/<userPoolId>
+# Spring auto-discovers the JWKS from the issuer's OIDC metadata and validates
+# the token signature, expiry, and issuer. Role mapping (cognito:groups) is
+# identical to the localjwt profile.
+
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${COGNITO_ISSUER_URI}

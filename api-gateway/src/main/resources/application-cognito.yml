@@ -1,0 +1,10 @@
+# Activated with: SPRING_PROFILES_ACTIVE=cognito
+# Production security: validate JWTs issued by AWS Cognito.
+#   COGNITO_ISSUER_URI = https://cognito-idp.<region>.amazonaws.com/<userPoolId>
+
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${COGNITO_ISSUER_URI}

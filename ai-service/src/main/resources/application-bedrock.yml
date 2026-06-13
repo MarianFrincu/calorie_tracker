@@ -1,0 +1,21 @@
+# Activated with: SPRING_PROFILES_ACTIVE=bedrock
+# Turns on the real AWS Bedrock LLM for the ingredient parser.
+# Credentials resolved via the default AWS chain (env vars, ~/.aws, or — in
+# the cloud — the ECS task IAM role). Region + model id are overridable via env.
+
+spring:
+  ai:
+    model:
+      chat: bedrock-converse
+    bedrock:
+      aws:
+        region: ${AWS_REGION:eu-central-1}
+      converse:
+        chat:
+          options:
+            model: ${BEDROCK_MODEL_ID:eu.anthropic.claude-3-5-sonnet-20240620-v1:0}
+            temperature: 0.2
+
+calorietracker:
+  ai:
+    provider: bedrock

@@ -1,0 +1,118 @@
+# Local orchestration for the Calorie Tracker platform.
+# Boot order is enforced via healthchecks + depends_on so the first run is clean:
+#   postgres -> eureka-server -> (backend-core, api-gateway)
+#
+# Everything environment-specific is injected here, so the same images run
+# unchanged on AWS ECS/Fargate (where these env vars come from Secrets Manager).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ct-postgres
+    environment:
+      POSTGRES_DB: calorietracker
+      POSTGRES_USER: calorie
+      POSTGRES_PASSWORD: calorie
+    ports:
+      # Host port 15432 to avoid clashing with a local Postgres on 5432.
+      # Inside the docker network, services still reach it as postgres:5432.
+      - "15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calorie -d calorietracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ct-net
+
+  eureka-server:
+    build: ./eureka-server
+    image: calorietracker/eureka-server:local
+    container_name: ct-eureka
+    ports:
+      - "8761:8761"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8761/actuator/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    networks:
+      - ct-net
+
+  backend-core:
+    build: ./backend-core
+    image: calorietracker/backend-core:local
+    container_name: ct-backend-core
+    environment:
+      SPRING_PROFILES_ACTIVE: localjwt
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/calorietracker
+      SPRING_DATASOURCE_USERNAME: calorie
+      SPRING_DATASOURCE_PASSWORD: calorie
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/actuator/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+    networks:
+      - ct-net
+
+  ai-service:
+    build: ./ai-service
+    image: calorietracker/ai-service:local
+    container_name: ct-ai-service
+    environment:
+      SPRING_PROFILES_ACTIVE: localjwt
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+    ports:
+      - "8082:8082"
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8082/actuator/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+    networks:
+      - ct-net
+
+  api-gateway:
+    build: ./api-gateway
+    image: calorietracker/api-gateway:local
+    container_name: ct-api-gateway
+    environment:
+      SPRING_PROFILES_ACTIVE: localjwt
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+    ports:
+      - "8080:8080"
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+    networks:
+      - ct-net
+
+volumes:
+  pgdata:
+
+networks:
+  ct-net:
+    driver: bridge

@@ -1,0 +1,568 @@
+/* Calorie Tracker - modern light theme. */
+
+.root {
+    -fx-font-family: "Segoe UI", "Helvetica Neue", "Inter", "Arial", sans-serif;
+    -fx-background-color: #f0f4f8;
+    -fx-font-size: 14px;
+    -fx-text-fill: #1a202c;
+}
+
+/* ---------------- Sidebar ---------------- */
+.sidebar {
+    -fx-background-color: #1a202c;
+    -fx-padding: 16 0 16 0;
+}
+.sidebar .brand {
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+    -fx-font-size: 15px;
+    /* Reduced from "0 16 12 16" so the full title fits inside a 200 px sidebar
+       alongside the toggle chevron - the old padding plus the toggle button
+       elided the last few characters. */
+    -fx-padding: 0 8 12 12;
+}
+.sidebar .nav-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: #cbd5e0;
+    -fx-font-size: 14px;
+    -fx-padding: 10 16 10 16;
+    -fx-alignment: CENTER_LEFT;
+    -fx-background-radius: 0;
+    -fx-cursor: hand;
+    -fx-border-width: 0 0 0 3;
+    -fx-border-color: transparent;
+}
+.sidebar .nav-button:hover {
+    -fx-background-color: #2d3748;
+    -fx-text-fill: white;
+}
+.sidebar .nav-button.active {
+    -fx-background-color: #2d3748;
+    -fx-text-fill: white;
+    -fx-border-color: #4299e1;
+    -fx-font-weight: bold;
+}
+.sidebar .separator .line {
+    -fx-border-color: #2d3748;
+    -fx-border-width: 1 0 0 0;
+}
+.sidebar-toggle {
+    /* Filled pill so the chevron is always visible against the dark sidebar
+       (a transparent button on near-black hides the icon). */
+    -fx-background-color: #2d3748;
+    -fx-text-fill: #e2e8f0;
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-padding: 4 10 4 10;
+    -fx-min-height: 28px;
+    -fx-min-width: 30px;
+    -fx-background-radius: 6;
+    -fx-cursor: hand;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 4, 0, 0, 1);
+}
+.sidebar-toggle:hover {
+    -fx-background-color: #4299e1;
+    -fx-text-fill: white;
+}
+.sidebar-toggle:pressed {
+    -fx-background-color: #3182ce;
+}
+.sidebar-top {
+    /* Compact top row containing the brand + collapse chevron. */
+    -fx-padding: 0 0 10 0;
+}
+
+/* ---------------- Cards & containers ---------------- */
+.toolbar {
+    -fx-background-color: white;
+    -fx-padding: 10 14 10 14;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.06), 4, 0, 0, 1);
+}
+.card {
+    -fx-background-color: white;
+    -fx-background-radius: 10;
+    -fx-padding: 16;
+    -fx-effect: dropshadow(gaussian, rgba(15,23,42,0.06), 8, 0, 0, 2);
+}
+.card-title {
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #718096;
+}
+.section-title {
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1a202c;
+}
+.big-number {
+    -fx-font-size: 30px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1a202c;
+}
+.medium-number {
+    -fx-font-size: 22px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1a202c;
+}
+.muted {
+    -fx-text-fill: #4a5568;
+    -fx-font-size: 13px;
+}
+.formula-block {
+    -fx-font-family: "JetBrains Mono", "Consolas", "Menlo", "Courier New", monospace;
+    -fx-font-size: 13px;
+    -fx-text-fill: #2d3748;
+    -fx-background-color: #f7fafc;
+    -fx-border-color: #e2e8f0;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 10 12 10 12;
+    -fx-line-spacing: 2;
+}
+
+/* ---------------- Buttons ---------------- */
+.button {
+    -fx-background-color: #edf2f7;
+    -fx-text-fill: #2d3748;
+    -fx-background-radius: 6;
+    -fx-padding: 8 16 8 16;
+    -fx-font-size: 14px;
+    -fx-min-height: 34px;
+    -fx-cursor: hand;
+    -fx-border-width: 0;
+}
+.button:hover { -fx-background-color: #e2e8f0; }
+.button:default, .primary-button {
+    -fx-background-color: #4299e1;
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}
+.button:default:hover, .primary-button:hover { -fx-background-color: #3182ce; }
+.success-button {
+    -fx-background-color: #48bb78;
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}
+.success-button:hover { -fx-background-color: #38a169; }
+.danger-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: #e53e3e;
+    -fx-padding: 6 10 6 10;
+    -fx-min-height: 28px;
+    -fx-font-weight: bold;
+}
+.danger-button:hover { -fx-background-color: #fed7d7; }
+
+/* ---------------- Entry-row action menu ---------------- */
+.entry-actions {
+    -fx-background-color: transparent;
+    -fx-text-fill: #4a5568;
+    -fx-font-weight: bold;
+    -fx-padding: 4 10 4 10;
+    -fx-min-height: 28px;
+    -fx-background-radius: 6;
+}
+.entry-actions:hover { -fx-background-color: #e2e8f0; }
+.entry-actions .arrow-button { -fx-padding: 0; }
+.entry-actions .arrow { -fx-shape: ""; -fx-padding: 0; }
+
+/* ---------------- Day view ---------------- */
+.titled-pane {
+    -fx-text-fill: #1a202c;
+}
+.titled-pane > .title {
+    -fx-background-color: white;
+    -fx-background-radius: 8 8 0 0;
+    -fx-padding: 8 12 8 12;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(gaussian, rgba(15,23,42,0.04), 4, 0, 0, 1);
+}
+.titled-pane:expanded > .title {
+    -fx-background-radius: 8 8 0 0;
+}
+.titled-pane:collapsed > .title {
+    -fx-background-radius: 8;
+}
+.titled-pane > .content {
+    -fx-background-color: white;
+    -fx-border-color: transparent;
+    -fx-padding: 4 0 4 0;
+    -fx-background-radius: 0 0 8 8;
+}
+.entry-row {
+    -fx-background-color: #f7fafc;
+    -fx-background-radius: 6;
+    -fx-padding: 8 10 8 10;
+}
+.entry-row:hover {
+    -fx-background-color: #edf2f7;
+}
+.entry-name {
+    -fx-font-weight: bold;
+    -fx-text-fill: #1a202c;
+}
+.entry-meta {
+    -fx-text-fill: #718096;
+    -fx-font-size: 11px;
+}
+.entry-kcal {
+    -fx-font-weight: bold;
+    -fx-text-fill: #2b6cb0;
+}
+.add-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: #4299e1;
+    -fx-font-weight: bold;
+    -fx-border-color: #cbd5e0;
+    -fx-border-style: dashed;
+    -fx-border-width: 1;
+    -fx-border-radius: 6;
+    -fx-padding: 6 10 6 10;
+}
+.add-button:hover {
+    -fx-background-color: #ebf8ff;
+    -fx-border-style: solid;
+    -fx-border-color: #4299e1;
+}
+
+/* ---------------- Progress bars ---------------- */
+.progress-bar { -fx-accent: #4299e1; }
+.progress-bar .bar { -fx-background-radius: 8; -fx-padding: 0; }
+.progress-bar .track { -fx-background-radius: 8; -fx-background-color: #edf2f7; }
+.progress-bar.water .bar { -fx-background-color: #38b2ac; }
+.progress-bar.protein .bar { -fx-background-color: #e53e3e; }
+.progress-bar.carbs .bar { -fx-background-color: #ed8936; }
+.progress-bar.fat .bar { -fx-background-color: #ecc94b; }
+.progress-bar.fiber .bar { -fx-background-color: #48bb78; }
+
+/* ---------------- Macro rows in the summary card ---------------- */
+.macro-name {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1a202c;
+}
+.macro-value {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #2d3748;
+}
+.macro-value-muted {
+    -fx-font-size: 13px;
+    -fx-text-fill: #718096;
+}
+.macro-bar { -fx-pref-height: 14px; }
+
+/* ---------------- Inputs ---------------- */
+.text-field, .password-field, .spinner, .spinner .text-field, .combo-box, .date-picker,
+.text-area {
+    -fx-background-color: white;
+    -fx-background-radius: 6;
+    -fx-border-color: #cbd5e0;
+    -fx-border-radius: 6;
+    -fx-padding: 6 10 6 10;
+    -fx-min-height: 34px;
+    -fx-font-size: 14px;
+    -fx-text-fill: #1a202c;
+}
+.spinner { -fx-padding: 0; }
+.spinner .text-field {
+    -fx-border-width: 0;
+    -fx-background-radius: 6 0 0 6;
+}
+.spinner .increment-arrow-button, .spinner .decrement-arrow-button {
+    -fx-background-color: #edf2f7;
+    -fx-padding: 4 8 4 8;
+}
+.spinner .increment-arrow-button:hover, .spinner .decrement-arrow-button:hover {
+    -fx-background-color: #e2e8f0;
+}
+.combo-box .list-cell {
+    -fx-padding: 4 8 4 8;
+    -fx-font-size: 14px;
+}
+.combo-box-popup .list-view .list-cell {
+    -fx-padding: 6 10 6 10;
+}
+.text-field:focused, .password-field:focused, .spinner:focused, .combo-box:focused, .date-picker:focused,
+.text-area:focused {
+    -fx-border-color: #4299e1;
+}
+.text-area .content { -fx-background-color: white; }
+
+/* ---------------- Tables ---------------- */
+.table-view {
+    -fx-background-color: white;
+    -fx-background-radius: 8;
+    -fx-border-color: #e2e8f0;
+    -fx-border-radius: 8;
+}
+.table-view .column-header-background { -fx-background-color: #edf2f7; -fx-background-radius: 8 8 0 0; }
+.table-view .column-header, .table-view .filler {
+    -fx-background-color: transparent;
+    -fx-border-width: 0;
+}
+.table-view .column-header .label {
+    -fx-text-fill: #4a5568;
+    -fx-font-weight: bold;
+    -fx-font-size: 11px;
+}
+.table-view .table-cell { -fx-padding: 6 8 6 8; }
+.table-row-cell { -fx-background-color: white; }
+.table-row-cell:odd { -fx-background-color: #f7fafc; }
+.table-row-cell:selected,
+.table-row-cell:selected .text {
+    -fx-background-color: #2b6cb0;
+    -fx-text-fill: white;
+}
+.table-row-cell:selected:hover {
+    -fx-background-color: #2c5282;
+}
+.table-row-cell:focused:selected .table-cell {
+    -fx-text-fill: white;
+}
+
+/* ---------------- Selection in lists / combo popups ---------------- */
+.list-view .list-cell:filled:selected,
+.combo-box-popup .list-view .list-cell:filled:selected {
+    -fx-background-color: #2b6cb0;
+    -fx-text-fill: white;
+}
+.list-view .list-cell:filled:selected:hover,
+.combo-box-popup .list-view .list-cell:filled:selected:hover {
+    -fx-background-color: #2c5282;
+}
+
+/* ---------------- TabPane ---------------- */
+.tab-pane > .tab-header-area > .headers-region > .tab {
+    -fx-background-color: transparent;
+    -fx-padding: 6 18 6 18;
+    -fx-background-radius: 0;
+}
+.tab-pane > .tab-header-area > .headers-region > .tab .tab-label {
+    -fx-text-fill: #4a5568;
+    -fx-font-weight: bold;
+}
+.tab-pane > .tab-header-area > .headers-region > .tab:hover .tab-label {
+    -fx-text-fill: #1a202c;
+}
+.tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-background-color: white;
+    -fx-border-color: transparent transparent #4299e1 transparent;
+    -fx-border-width: 0 0 3 0;
+}
+.tab-pane > .tab-header-area > .headers-region > .tab:selected .tab-label {
+    -fx-text-fill: #2b6cb0;
+}
+.tab-pane > .tab-header-area > .tab-header-background { -fx-background-color: #edf2f7; }
+
+/* ---------------- Advanced-search rule group box ---------------- */
+.rule-group {
+    -fx-background-color: #f7fafc;
+    -fx-border-color: #cbd5e0;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 10;
+}
+.rule-group .rule-group {
+    /* nested group: a subtle different tint so the depth is visible */
+    -fx-background-color: #edf2f7;
+    -fx-border-color: #a0aec0;
+}
+.rule-row {
+    -fx-background-color: white;
+    -fx-border-color: #e2e8f0;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+}
+.rule-summary {
+    -fx-font-family: "JetBrains Mono", "Consolas", "Menlo", "Courier New", monospace;
+    -fx-font-size: 14px;
+    -fx-text-fill: #1a202c;
+}
+
+/* ---------------- Operator toggle buttons in the rule editor ---------------- */
+.op-toggle {
+    -fx-background-color: white;
+    -fx-text-fill: #2d3748;
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+    -fx-padding: 6 12 6 12;
+    -fx-background-radius: 6;
+    -fx-border-color: #cbd5e0;
+    -fx-border-radius: 6;
+    -fx-cursor: hand;
+}
+.op-toggle:hover {
+    -fx-background-color: #edf2f7;
+}
+.op-toggle:selected {
+    -fx-background-color: #2b6cb0;
+    -fx-text-fill: white;
+    -fx-border-color: #2b6cb0;
+}
+.op-toggle:selected:hover {
+    -fx-background-color: #2c5282;
+}
+
+/* ---------------- Inline form-validation hint ---------------- */
+.inline-hint {
+    -fx-background-color: #fff5cc;
+    -fx-text-fill: #744210;
+    -fx-border-color: #e2b94a;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 8 12 8 12;
+    -fx-font-weight: bold;
+}
+
+/* ---------------- Water chips (click to remove an entry) ---------------- */
+.water-chip {
+    -fx-background-color: #ebf8ff;
+    -fx-text-fill: #2c5282;
+    -fx-padding: 4 10 4 10;
+    -fx-background-radius: 12;
+    -fx-border-color: transparent;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-cursor: hand;
+}
+.water-chip:hover {
+    -fx-background-color: #fed7d7;
+    -fx-text-fill: #c53030;
+}
+
+/* ---------------- Macro tags ---------------- */
+.macro-tag {
+    -fx-padding: 2 8 2 8;
+    -fx-background-radius: 4;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+.macro-tag.protein { -fx-background-color: #fed7d7; -fx-text-fill: #c53030; }
+.macro-tag.carbs   { -fx-background-color: #feebc8; -fx-text-fill: #b7791f; }
+.macro-tag.fat     { -fx-background-color: #fefcbf; -fx-text-fill: #b7791f; }
+.macro-tag.fiber   { -fx-background-color: #c6f6d5; -fx-text-fill: #2f855a; }
+/* Library-match badges on AI parse results. */
+.macro-tag.library-check   { -fx-background-color: #edf2f7; -fx-text-fill: #4a5568; }
+.macro-tag.library-found   { -fx-background-color: #c6f6d5; -fx-text-fill: #22543d; }
+.macro-tag.library-app     { -fx-background-color: #bee3f8; -fx-text-fill: #2c5282; }
+.macro-tag.library-mine    { -fx-background-color: #c6f6d5; -fx-text-fill: #22543d; }
+.macro-tag.library-missing { -fx-background-color: #feebc8; -fx-text-fill: #7b341e; }
+
+/* ---------------- AI view chat bubbles ---------------- */
+.chat-user, .chat-ai {
+    -fx-background-radius: 12;
+    -fx-padding: 10 14 10 14;
+    -fx-max-width: 540;
+}
+.chat-user {
+    -fx-background-color: #4299e1;
+    -fx-text-fill: white;
+}
+.chat-user .label { -fx-text-fill: white; }
+.chat-ai {
+    -fx-background-color: white;
+    -fx-effect: dropshadow(gaussian, rgba(15,23,42,0.06), 6, 0, 0, 2);
+}
+
+/* ---------------- Profile pulse ---------------- */
+.target-card {
+    -fx-background-color: linear-gradient(to bottom right, #4299e1, #2b6cb0);
+    -fx-background-radius: 12;
+    -fx-padding: 20;
+}
+.target-card .card-title,
+.target-card .big-number,
+.target-card .medium-number,
+.target-card .muted,
+.target-card .section-title,
+.target-card Label {
+    -fx-text-fill: white;
+}
+.target-card .big-number {
+    -fx-font-size: 36px;
+}
+.target-card .muted {
+    -fx-text-fill: #ebf8ff;
+}
+/* Macro tags inside the target gradient: the bright pastel backgrounds
+   (.protein/.carbs/.fat/.fiber) clash with the blue and the white text
+   becomes unreadable on them. Replace with a low-opacity white pill so
+   the text stays legible regardless of which macro we're showing. */
+.target-card .macro-tag,
+.target-card .macro-tag.protein,
+.target-card .macro-tag.carbs,
+.target-card .macro-tag.fat,
+.target-card .macro-tag.fiber {
+    -fx-background-color: rgba(255, 255, 255, 0.18);
+    -fx-text-fill: white;
+}
+
+/* ---------------- Reports chart - target as line, only actual is filled ---------------- */
+/* Series 0 (Actual): translucent blue area + solid blue line. */
+.chart-series-area-fill.default-color0 {
+    -fx-fill: rgba(66, 153, 225, 0.25);
+}
+.chart-series-area-line.default-color0 {
+    -fx-stroke: #2b6cb0;
+    -fx-stroke-width: 2.2;
+    /* Round joins / caps so polyline corners look smooth instead of pointy. */
+    -fx-stroke-line-join: round;
+    -fx-stroke-line-cap: round;
+}
+/* Series 1 (Target): no fill, dashed red line - reads unambiguously as a goal line. */
+.chart-series-area-fill.default-color1 {
+    -fx-fill: transparent;
+}
+.chart-series-area-line.default-color1 {
+    -fx-stroke: #c53030;
+    -fx-stroke-width: 2.5;
+    -fx-stroke-dash-array: 8 6;
+    -fx-stroke-line-join: round;
+    -fx-stroke-line-cap: round;
+}
+/* Legend swatches to match. */
+.chart-legend-item-symbol.default-color0 { -fx-background-color: #2b6cb0; }
+.chart-legend-item-symbol.default-color1 { -fx-background-color: #c53030; }
+
+/* Weight tab uses the same SmoothAreaChart but as a line-only graph: kill
+   the area fill so only the curve + markers show against a clean background. */
+.weight-chart .chart-series-area-fill {
+    -fx-fill: transparent;
+}
+.weight-chart .chart-series-area-line.default-color0 {
+    -fx-stroke: #2b6cb0;
+    -fx-stroke-width: 2.4;
+    -fx-stroke-line-join: round;
+    -fx-stroke-line-cap: round;
+}
+
+/* Per-day symbols (visible markers) - filled circle in the series color
+   with a thin dark outline (1 px) so they stay distinct against both the
+   white background and the translucent area fill. */
+.default-color0.chart-area-symbol {
+    -fx-background-color: #1a202c, #2b6cb0;
+    -fx-background-insets: 0, 1;
+    -fx-background-radius: 5px;
+    -fx-padding: 4px;
+}
+.default-color1.chart-area-symbol {
+    -fx-background-color: #1a202c, #c53030;
+    -fx-background-insets: 0, 1;
+    -fx-background-radius: 5px;
+    -fx-padding: 4px;
+}
+/* Tooltip styling that matches the rest of the app's surface. */
+.chart-point-tooltip {
+    -fx-font-size: 12px;
+    -fx-background-color: #1a202c;
+    -fx-text-fill: white;
+    -fx-background-radius: 6;
+    -fx-padding: 6 10 6 10;
+}
+
+/* ---------------- Scroll panes ---------------- */
+.scroll-pane, .scroll-pane > .viewport {
+    -fx-background-color: transparent;
+}
+.scroll-pane .corner { -fx-background-color: transparent; }

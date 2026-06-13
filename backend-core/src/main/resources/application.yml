@@ -1,0 +1,62 @@
+server:
+  port: 8081
+  error:
+    # Don't surface internal exception messages or stack traces in the default
+    # error response (the kind Spring renders when a request doesn't match any
+    # @RestController). The GlobalExceptionHandler still produces friendly
+    # messages for in-app exceptions.
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+
+spring:
+  application:
+    name: backend-core
+  datasource:
+    # Defaults target a locally-run Postgres; docker-compose overrides the host
+    # to the 'postgres' service via env vars. Nothing is hardcoded for the cloud.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/calorietracker}
+    username: ${SPRING_DATASOURCE_USERNAME:calorie}
+    password: ${SPRING_DATASOURCE_PASSWORD:calorie}
+  jpa:
+    hibernate:
+      # Flyway owns the schema; Hibernate only validates the entity mappings match.
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+  flyway:
+    enabled: true
+    # The pre-existing DB volume already has a 'food_entries' table from the old
+    # demo; baseline-on-migrate lets Flyway take ownership without complaining.
+    baseline-on-migrate: true
+    baseline-version: 0
+  ai:
+    # Chat model auto-config OFF by default so the app boots with NO AWS access.
+    # The 'bedrock' profile turns it back on (see application-bedrock.yml).
+    model:
+      chat: none
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+  instance:
+    # Register by IP so discovery works cleanly inside the Docker network.
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+# AI provider for the ingredient parser: 'mock' (offline default) or 'bedrock'.
+calorietracker:
+  ai:
+    provider: ${CALORIETRACKER_AI_PROVIDER:mock}

@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Calorie Tracker - Foundation: VPC with 2 public subnets (no NAT, to stay cheap),
+  security groups, a Cloud Map private DNS namespace (for Eureka discovery), and
+  ECR repositories. Designed for AWS Academy Learner Lab (us-east-1).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: calorietracker
+    Description: Prefix used for resource names and cross-stack exports.
+
+Resources:
+
+  # ---------------- Networking ----------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-vpc' }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-igw' }
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # Two public subnets in different AZs (ALB requires >= 2 AZs).
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-public-1' }
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-public-2' }
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-public-rt' }
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # ---------------- Security Groups ----------------
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public ALB - allow HTTP from anywhere
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP }
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-alb-sg' }
+
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks - from ALB on 8080, plus intra-service traffic
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+          Description: Gateway from ALB
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-ecs-sg' }
+
+  # Allow all traffic between tasks in the same SG (Eureka 8761, core 8081, etc.)
+  EcsSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EcsSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref EcsSecurityGroup
+      Description: Intra-service communication
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS - PostgreSQL from ECS tasks only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EcsSecurityGroup
+          Description: PostgreSQL from ECS
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-rds-sg' }
+
+  # ---------------- Service discovery (for Eureka) ----------------
+  PrivateDnsNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: calorietracker.local
+      Vpc: !Ref Vpc
+      Description: Private DNS for inter-service discovery (Eureka bootstrap)
+
+  # ---------------- Container registries ----------------
+  EurekaRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProjectName}-eureka-server'
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 5",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5 },
+            "action": { "type": "expire" } } ] }
+
+  GatewayRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProjectName}-api-gateway'
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 5",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5 },
+            "action": { "type": "expire" } } ] }
+
+  CoreRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProjectName}-backend-core'
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 5",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5 },
+            "action": { "type": "expire" } } ] }
+
+  AiRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProjectName}-ai-service'
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 5",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5 },
+            "action": { "type": "expire" } } ] }
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export: { Name: !Sub '${ProjectName}-VpcId' }
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+    Export: { Name: !Sub '${ProjectName}-PublicSubnet1Id' }
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+    Export: { Name: !Sub '${ProjectName}-PublicSubnet2Id' }
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Export: { Name: !Sub '${ProjectName}-AlbSgId' }
+  EcsSecurityGroupId:
+    Value: !Ref EcsSecurityGroup
+    Export: { Name: !Sub '${ProjectName}-EcsSgId' }
+  RdsSecurityGroupId:
+    Value: !Ref RdsSecurityGroup
+    Export: { Name: !Sub '${ProjectName}-RdsSgId' }
+  NamespaceId:
+    Value: !Ref PrivateDnsNamespace
+    Export: { Name: !Sub '${ProjectName}-NamespaceId' }
+  EurekaRepoUri:
+    Value: !GetAtt EurekaRepo.RepositoryUri
+    Export: { Name: !Sub '${ProjectName}-EurekaRepoUri' }
+  GatewayRepoUri:
+    Value: !GetAtt GatewayRepo.RepositoryUri
+    Export: { Name: !Sub '${ProjectName}-GatewayRepoUri' }
+  CoreRepoUri:
+    Value: !GetAtt CoreRepo.RepositoryUri
+    Export: { Name: !Sub '${ProjectName}-CoreRepoUri' }
+  AiRepoUri:
+    Value: !GetAtt AiRepo.RepositoryUri
+    Export: { Name: !Sub '${ProjectName}-AiRepoUri' }

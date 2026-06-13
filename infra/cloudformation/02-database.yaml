@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Calorie Tracker - Database: PostgreSQL on RDS (cheapest viable) plus a
+  Secrets Manager secret holding the credentials. Imports networking from the
+  foundation stack. (AWS Academy Learner Lab friendly.)
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: calorietracker
+  DBEngineVersion:
+    Type: String
+    Default: '16.4'
+    Description: PostgreSQL version. Adjust if not available in your region.
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    Description: Smallest general-purpose class to keep cost low.
+
+Resources:
+
+  # Credentials live in Secrets Manager; the password is auto-generated.
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ProjectName}/db'
+      Description: RDS PostgreSQL credentials for Calorie Tracker
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"calorieadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 20
+        ExcludeCharacters: '"@/\ '''
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Calorie Tracker DB subnet group
+      SubnetIds:
+        - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet1Id'
+        - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet2Id'
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-db'
+      DBName: calorietracker
+      Engine: postgres
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp3
+      MultiAZ: false
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 0
+      DeletionProtection: false
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub '${ProjectName}-RdsSgId'
+
+  # Enriches the secret with host/port/dbname once the DB exists.
+  DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBSecret
+      TargetId: !Ref Database
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+  DBEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+    Export: { Name: !Sub '${ProjectName}-DBEndpoint' }
+  DBSecretArn:
+    Value: !Ref DBSecret
+    Export: { Name: !Sub '${ProjectName}-DBSecretArn' }
