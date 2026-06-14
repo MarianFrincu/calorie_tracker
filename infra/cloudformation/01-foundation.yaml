@@ -2,7 +2,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Calorie Tracker - Foundation: VPC with 2 public subnets (no NAT, to stay cheap),
   security groups, a Cloud Map private DNS namespace (for Eureka discovery), and
-  ECR repositories. Designed for AWS Academy Learner Lab (us-east-1).
+  ECR repositories. Region-agnostic — deploy in any region where you've granted
+  Bedrock model access (e.g. eu-central-1 or us-east-1).
 
 Parameters:
   ProjectName:

@@ -35,6 +35,9 @@ public class AppConfig {
 
     public String apiBaseUrl()    { return get("api.base.url", "http://localhost:8080"); }
     public String authMode()      { return get("auth.mode", "none"); }   // none | cognito
-    public String cognitoRegion() { return get("cognito.region", "us-east-1"); }
+    // No hardcoded region default — scripts/run-ui.sh sets COGNITO_REGION from
+    // your AWS_DEFAULT_REGION, and config.properties is intentionally empty.
+    // An empty region surfaces clearly when the cognito flow tries to use it.
+    public String cognitoRegion() { return get("cognito.region", ""); }
     public String cognitoClientId() { return get("cognito.client.id", ""); }
 }

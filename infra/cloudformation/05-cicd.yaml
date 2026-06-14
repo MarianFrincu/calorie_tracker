@@ -23,7 +23,10 @@ Parameters:
     Type: String
     Description: >
       ARN of the GitHub CodeStar/CodeConnections connection (Available state).
-      Looks like arn:aws:codeconnections:us-east-1:<acct>:connection/<uuid>.
+      Looks like arn:aws:codeconnections:<region>:<acct>:connection/<uuid>
+      where <region> is the region you created the CodeStar connection in
+      (must match where you deploy this stack — typically the same as the
+      app stack, e.g. eu-central-1).
     AllowedPattern: '^arn:aws:codeconnections:.+:connection/.+$|^arn:aws:codestar-connections:.+:connection/.+$'
 
   GitHubFullRepo:
