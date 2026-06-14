@@ -228,13 +228,15 @@ public class AiView extends BorderPane {
                 saveLibBtn.setOnAction(ev -> {
                     saveLibBtn.setDisable(true);
                     saveLibBtn.setText("Saving...");
+                    double grams = parseGrams(item.quantity());
+                    double scale = grams > 0 ? 100.0 / grams : 1.0;
                     Async.run(() -> api.createIngredient(new com.calorietracker.desktop.model.CreateIngredientRequest(
                                     item.name(), null,
-                                    perHundred(item.calories(), item.quantity()),
-                                    perHundredD(item.protein(), item.quantity()),
-                                    perHundredD(item.carbs(),   item.quantity()),
-                                    perHundredD(item.fat(),     item.quantity()),
-                                    perHundredD(item.fiber(),   item.quantity()))),
+                                    (int) Math.round(item.calories() * scale),
+                                    round1(item.protein() * scale),
+                                    round1(item.carbs()   * scale),
+                                    round1(item.fat()     * scale),
+                                    round1(item.fiber()   * scale))),
                             saved -> {
                                 saveLibBtn.setText("Saved!");
                                 badge.setText("in my library");
@@ -269,6 +271,7 @@ public class AiView extends BorderPane {
                 result.totalCalories(), result.totalProtein(), result.totalCarbs(),
                 result.totalFat(), result.totalFiber()));
         totals.getStyleClass().add("entry-name");
+        totals.setWrapText(true);
         bubble.getChildren().add(totals);
 
         DatePicker date = new DatePicker(LocalDate.now());
@@ -334,24 +337,29 @@ public class AiView extends BorderPane {
         return wrap;
     }
 
-    /** Convert "per-portion" macros into per-100 g equivalents using the quantity field.
-     *  Falls back to the value unchanged when no quantity is known. */
-    private static int perHundred(int perPortionKcal, String quantityText) {
-        int qty = parseQty(quantityText);
-        if (qty <= 0) return perPortionKcal;
-        // The mock parser scales by quantity but doesn't carry portion grams forward;
-        // for a per-100g library entry we leave the kcal as-is and rely on the user
-        // to edit afterwards. Same for the macros.
-        return perPortionKcal;
+    /**
+     * Extract a gram weight from the AI's free-text quantity field.
+     * Handles "500g", "500 g", "500 grams", "1.5 kg", "1500ml" (≈ grams for
+     * water-density foods). Returns 0 when the quantity isn't expressed as a
+     * mass (e.g. "1 cup", "2 slices") — caller treats 0 as "leave values as-is,
+     * the AI already reported per-portion numbers and that's the best we have".
+     */
+    private static double parseGrams(String s) {
+        if (s == null || s.isBlank()) return 0;
+        String t = s.trim().toLowerCase().replace(',', '.');
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(\\d+(?:\\.\\d+)?)\\s*(kg|g|gram|grams|ml|l)\\b").matcher(t);
+        if (!m.find()) return 0;
+        double n = Double.parseDouble(m.group(1));
+        return switch (m.group(2)) {
+            case "kg" -> n * 1000.0;
+            case "l"  -> n * 1000.0;
+            default   -> n;     // g, gram, grams, ml all treated as grams
+        };
     }
-    private static double perHundredD(double perPortion, String quantityText) {
-        int qty = parseQty(quantityText);
-        return qty <= 0 ? perPortion : perPortion;
-    }
-    private static int parseQty(String s) {
-        if (s == null || s.isBlank()) return 1;
-        try { return Math.max(1, Integer.parseInt(s.trim())); }
-        catch (NumberFormatException e) { return 1; }
+
+    private static double round1(double v) {
+        return Math.round(v * 10.0) / 10.0;
     }
 
     // ---------------- Recipe mode response bubble ----------------
@@ -367,6 +375,7 @@ public class AiView extends BorderPane {
 
         Label header = new Label("Recipe blueprint — edit name + cooked weight before saving if you like");
         header.getStyleClass().add("card-title");
+        header.setWrapText(true);
         bubble.getChildren().add(header);
 
         // Raw sum of ingredient grams — used as the default cooked-weight.

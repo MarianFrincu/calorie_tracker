@@ -82,6 +82,7 @@ public class RecipesView extends BorderPane {
         table.getColumns().add(ingCol);
         Label empty = new Label("No recipes yet. Click + New recipe (or build one via the AI tab).");
         empty.getStyleClass().add("muted");
+        empty.setWrapText(true);
         table.setPlaceholder(empty);
 
         Pager<Recipe> pager = new Pager<>(
@@ -166,6 +167,7 @@ public class RecipesView extends BorderPane {
         table.getColumns().add(fibCol);
         Label empty = new Label("No foods yet. Click + New food, or let the AI tab create some for you.");
         empty.getStyleClass().add("muted");
+        empty.setWrapText(true);
         table.setPlaceholder(empty);
 
         Pager<Ingredient> pager = new Pager<>(

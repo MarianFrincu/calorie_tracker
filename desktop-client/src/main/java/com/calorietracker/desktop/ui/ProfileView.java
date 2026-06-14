@@ -27,6 +27,8 @@ import javafx.scene.layout.VBox;
 public class ProfileView extends BorderPane {
 
     private final ApiClient api;
+    /** Notifies the shell after a successful save so it can lift the onboarding lock. */
+    private final Runnable onSaved;
 
     private final TextField nameField = new TextField();
     private final ComboBox<Sex> sexBox = new ComboBox<>(FXCollections.observableArrayList(Sex.values()));
@@ -38,11 +40,17 @@ public class ProfileView extends BorderPane {
     private final Label bmrValue = new Label("-");
     private final Label tdeeValue = new Label("-");
     private final Label savedHint = new Label(" ");
+    private final Label onboardingBanner = new Label();
 
     private Integer lastSavedBmr;
 
     public ProfileView(ApiClient api) {
+        this(api, null);
+    }
+
+    public ProfileView(ApiClient api, Runnable onSaved) {
         this.api = api;
+        this.onSaved = onSaved;
         ageSpinner.setEditable(true);
         heightSpinner.setEditable(true);
         weightSpinner.setEditable(true);
@@ -123,7 +131,18 @@ public class ProfileView extends BorderPane {
         formulaCard.getStyleClass().add("card");
         formulaCard.setMaxWidth(540);
 
-        VBox content = new VBox(16, statsCard, formCard, formulaCard);
+        // Onboarding banner — hidden by default; load() turns it on if the
+        // server says any required field is still missing.
+        onboardingBanner.setText(
+                "Welcome! Fill in your sex, age, height, weight and activity level, "
+                + "then press Save. The other tabs unlock once your profile is complete.");
+        onboardingBanner.setWrapText(true);
+        onboardingBanner.getStyleClass().add("onboarding-banner");
+        onboardingBanner.setMaxWidth(540);
+        onboardingBanner.setVisible(false);
+        onboardingBanner.setManaged(false);
+
+        VBox content = new VBox(16, onboardingBanner, statsCard, formCard, formulaCard);
         content.setPadding(new Insets(20));
         content.setAlignment(Pos.TOP_CENTER);
 
@@ -179,6 +198,11 @@ public class ProfileView extends BorderPane {
             if (p.weightKg() != null) weightSpinner.getValueFactory().setValue(p.weightKg());
             if (p.activityLevel() != null) activityBox.setValue(p.activityLevel());
             lastSavedBmr = p.bmr();
+            boolean incomplete = p.sex() == null || p.age() == null
+                    || p.heightCm() == null || p.weightKg() == null
+                    || p.activityLevel() == null;
+            onboardingBanner.setVisible(incomplete);
+            onboardingBanner.setManaged(incomplete);
             updatePreview();
             // Now overlay the latest weight log if one exists - this is the
             // single source of truth for "current body weight".
@@ -202,6 +226,11 @@ public class ProfileView extends BorderPane {
                 activityBox.getValue());
         Async.run(() -> api.updateProfile(req), p -> {
             lastSavedBmr = p.bmr();
+            // Save dismisses the banner — request couldn't have succeeded if
+            // any required field were still missing (the form always sends
+            // all six fields together).
+            onboardingBanner.setVisible(false);
+            onboardingBanner.setManaged(false);
             updatePreview();
             // Also log today's weight so the Weight tab and the Profile tab
             // never diverge. upsertWeight is idempotent per (user, date),
@@ -211,6 +240,9 @@ public class ProfileView extends BorderPane {
                 Async.run(() -> api.upsertWeight(java.time.LocalDate.now(), weight),
                         ignored -> {});
             }
+            // Let the shell lift the onboarding lock once every required field
+            // (sex/age/height/weight/activity) is present.
+            if (onSaved != null) onSaved.run();
             Alert alert = new Alert(Alert.AlertType.INFORMATION,
                     "Saved. BMR " + p.bmr() + " kcal, maintenance TDEE " + p.tdeeMaintain() + " kcal.");
             com.calorietracker.desktop.AppContext.prepareDialog(alert);

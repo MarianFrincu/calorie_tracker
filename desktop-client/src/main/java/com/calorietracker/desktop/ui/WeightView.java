@@ -105,6 +105,7 @@ public class WeightView extends BorderPane {
         table.getColumns().add(delCol);
         Label empty = new Label("No weight logged yet. Use the bar above to add today's measurement.");
         empty.getStyleClass().add("muted");
+        empty.setWrapText(true);
         table.setPlaceholder(empty);
         table.setPrefWidth(360);
 

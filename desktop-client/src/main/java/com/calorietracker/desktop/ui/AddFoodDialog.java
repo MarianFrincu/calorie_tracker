@@ -161,6 +161,7 @@ public class AddFoodDialog extends Dialog<AddDiaryRequest> {
         table.getColumns().add(macroCol);
         Label empty = new Label("No foods yet. Try searching a common one, or add one in the Recipes -> Foods tab.");
         empty.getStyleClass().add("muted");
+        empty.setWrapText(true);
         table.setPlaceholder(empty);
         table.getSelectionModel().selectedItemProperty().addListener((o, oldV, v) -> state.selected = v);
         VBox.setVgrow(table, Priority.ALWAYS);
@@ -205,6 +206,7 @@ public class AddFoodDialog extends Dialog<AddDiaryRequest> {
         table.getColumns().add(macroCol);
         Label empty = new Label("No recipes match. Build one in the Recipes tab, or have the AI tab draft one for you.");
         empty.getStyleClass().add("muted");
+        empty.setWrapText(true);
         table.setPlaceholder(empty);
         table.getSelectionModel().selectedItemProperty().addListener((o, oldV, v) -> state.selected = v);
         VBox.setVgrow(table, Priority.ALWAYS);

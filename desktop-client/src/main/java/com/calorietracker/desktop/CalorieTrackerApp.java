@@ -1,7 +1,9 @@
 package com.calorietracker.desktop;
 
 import com.calorietracker.desktop.api.ApiClient;
+import com.calorietracker.desktop.api.ApiException;
 import com.calorietracker.desktop.api.CognitoAuthService;
+import com.calorietracker.desktop.model.Profile;
 import com.calorietracker.desktop.ui.AiView;
 import com.calorietracker.desktop.ui.DayView;
 import com.calorietracker.desktop.ui.FoodExplorerView;
@@ -54,6 +56,10 @@ public class CalorieTrackerApp extends Application {
     /** Cached so chat history doesn't disappear when the user leaves the tab. */
     private AiView aiView;
 
+    /** True until the user has saved a complete profile. While true, only the
+     *  Profile tab is enabled — every other view depends on BMR/TDEE existing. */
+    private boolean onboardingLock = false;
+
     public static void main(String[] args) {
         launch(args);
     }
@@ -70,20 +76,84 @@ public class CalorieTrackerApp extends Application {
             String saved = com.calorietracker.desktop.api.SessionStore.loadIfValid();
             if (saved != null) {
                 api.setToken(saved);
+                // Saved token might be revoked / past Cognito's own expiry / on a
+                // server with a different JWK. Probe before showing the UI; on any
+                // failure drop the token and force a fresh login.
+                if (!sessionValid()) {
+                    api.setToken(null);
+                    com.calorietracker.desktop.api.SessionStore.clear();
+                    if (!login()) return;
+                }
             } else if (!login()) {
                 return;
             }
         }
+
+        // Decide what the user sees first based on profile completeness. New
+        // signups have empty sex/age/etc. — landing them anywhere but Profile
+        // would 404 charts and produce the "nothing renders" effect.
+        onboardingLock = !isProfileComplete();
+
         root = new BorderPane();
         sidebar = buildSidebar();
         root.setLeft(sidebar);
-        showDay();
+        if (onboardingLock) showProfile(); else showDay();
 
         Scene scene = new Scene(root, 1280, 820);
         scene.getStylesheets().add(getClass().getResource("/app.css").toExternalForm());
         stage.setScene(scene);
         stage.setTitle("Calorie Tracker");
         stage.show();
+    }
+
+    /** True iff a GET /api/profile succeeds with the current token. */
+    private boolean sessionValid() {
+        try {
+            api.getProfile();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** True iff the user has saved every body-stat needed for BMR/TDEE. */
+    private boolean isProfileComplete() {
+        try {
+            Profile p = api.getProfile();
+            return p != null
+                    && p.sex() != null
+                    && p.age() != null
+                    && p.heightCm() != null
+                    && p.weightKg() != null
+                    && p.activityLevel() != null;
+        } catch (Exception e) {
+            // If we can't tell, be safe and lock to onboarding.
+            return false;
+        }
+    }
+
+    /**
+     * Called by ProfileView right after a successful save so the sidebar can
+     * unlock the other tabs without requiring a full app restart.
+     */
+    private void onProfileSaved() {
+        if (onboardingLock && isProfileComplete()) {
+            onboardingLock = false;
+            applyOnboardingLock();
+        }
+    }
+
+    /** Disable every nav button except Profile while we're in onboarding-lock. */
+    private void applyOnboardingLock() {
+        for (Button b : navButtons) {
+            boolean isProfile = "Profile".equals(b.getText());
+            b.setDisable(onboardingLock && !isProfile);
+            if (onboardingLock && !isProfile) {
+                if (!b.getStyleClass().contains("nav-locked")) b.getStyleClass().add("nav-locked");
+            } else {
+                b.getStyleClass().remove("nav-locked");
+            }
+        }
     }
 
     // ---------------- Sidebar ----------------
@@ -141,6 +211,9 @@ public class CalorieTrackerApp extends Application {
         box.setPrefWidth(200);
         box.setAlignment(Pos.TOP_LEFT);
         box.getStyleClass().add("sidebar");
+        // Disable non-Profile buttons if we're locked into onboarding so the
+        // user can only complete the profile before navigating elsewhere.
+        applyOnboardingLock();
         return box;
     }
 
@@ -199,7 +272,7 @@ public class CalorieTrackerApp extends Application {
         swap(2, aiView);
     }
     private void showCompare()   { swap(3, new FoodExplorerView(api)); }
-    private void showProfile()   { swap(4, new ProfileView(api)); }
+    private void showProfile()   { swap(4, new ProfileView(api, this::onProfileSaved)); }
     private void showObjective() { swap(5, new ObjectiveView(api)); }
     private void showWeight()    { swap(6, new WeightView(api)); }
     private void showReports()   { swap(7, new ReportsView(api)); }
@@ -225,11 +298,16 @@ public class CalorieTrackerApp extends Application {
         // Hide the main window so only the login dialog is visible.
         if (stage != null) stage.hide();
         if (login()) {
+            // Re-evaluate onboarding state for the freshly signed-in user — a
+            // different account may need to complete the profile, or may
+            // already be set up. Build sidebar AFTER setting the lock so the
+            // gating runs on the fresh button list.
+            onboardingLock = !isProfileComplete();
             // Re-assign the field too, otherwise toggleSidebarCollapsed keeps
             // mutating the OLD VBox that is no longer on screen.
             sidebar = buildSidebar();
             root.setLeft(sidebar);
-            showDay();
+            if (onboardingLock) showProfile(); else showDay();
             if (stage != null) stage.show();
         } else {
             // User cancelled the sign-in dialog: quit the app entirely.

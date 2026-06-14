@@ -42,6 +42,26 @@
     -fx-border-color: #4299e1;
     -fx-font-weight: bold;
 }
+/* nav-locked: visual cue for buttons disabled during the onboarding gate.
+   Disabled buttons get faded so the user notices the lock without it looking
+   broken. */
+.sidebar .nav-button.nav-locked,
+.sidebar .nav-button.nav-locked:disabled {
+    -fx-text-fill: #4a5568;
+    -fx-opacity: 0.6;
+    -fx-cursor: not-allowed;
+}
+/* Onboarding banner: amber "do this first" callout on the Profile view, used
+   only while required body-stat fields are still missing. */
+.onboarding-banner {
+    -fx-background-color: #fffaf0;
+    -fx-text-fill: #7b341e;
+    -fx-border-color: #ed8936;
+    -fx-border-width: 0 0 0 4;
+    -fx-padding: 12 16 12 16;
+    -fx-background-radius: 6;
+    -fx-font-size: 13px;
+}
 .sidebar .separator .line {
     -fx-border-color: #2d3748;
     -fx-border-width: 1 0 0 0;
