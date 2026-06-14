@@ -1,7 +1,6 @@
 package com.calorietracker.desktop;
 
 import com.calorietracker.desktop.api.ApiClient;
-import com.calorietracker.desktop.api.ApiException;
 import com.calorietracker.desktop.api.CognitoAuthService;
 import com.calorietracker.desktop.model.Profile;
 import com.calorietracker.desktop.ui.AiView;
