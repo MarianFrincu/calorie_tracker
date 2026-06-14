@@ -73,6 +73,28 @@ public class IngredientService {
         return repository.save(i);
     }
 
+    /** Update an owned ingredient. Refuses to touch public seed rows or someone else's row. */
+    @Transactional
+    public Ingredient update(Long id, CreateIngredientRequest req) {
+        Ingredient i = repository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Ingredient " + id + " not found"));
+        AppUser me = currentUser.current();
+        if (i.getOwnerUserId() == null) {
+            throw new IllegalStateException("Cannot edit a public ingredient.");
+        }
+        if (!i.getOwnerUserId().equals(me.getId())) {
+            throw new ResourceNotFoundException("Ingredient " + id + " not found");
+        }
+        i.setName(req.name());
+        i.setBrand(req.brand());
+        i.setKcalPer100g(req.kcalPer100g());
+        i.setProteinPer100g(req.proteinPer100g());
+        i.setCarbsPer100g(req.carbsPer100g());
+        i.setFatPer100g(req.fatPer100g());
+        i.setFiberPer100g(req.fiberPer100g());
+        return repository.save(i);
+    }
+
     /** Refuses to delete if the ingredient is still referenced by any recipe. */
     @Transactional
     public void delete(Long id) {

@@ -44,19 +44,36 @@ public class RecipeBuilderDialog extends Dialog<Recipe> {
 
     private final ApiClient api;
     private final TextField nameField = new TextField();
-    private final Spinner<Integer> servingsSpinner = new Spinner<>(1, 99, 1);
+    private final TextField cookedGramsField = new TextField();
     private final TableView<Ingredient> searchTable = new TableView<>();
     private final TextField searchField = new TextField();
     private final TextField amountField = new TextField("100");
     private final ObservableList<LineRow> lines = FXCollections.observableArrayList();
     private final TableView<LineRow> linesTable = new TableView<>(lines);
     private final Label totalsLabel = new Label("Totals: 0 kcal");
+    private final Label per100gLabel = new Label("Per 100 g (cooked): —");
     private final Pager<Ingredient> ingredientPager;
+    private boolean cookedGramsTouched = false;
+
+    private final Recipe editing;
 
     public RecipeBuilderDialog(ApiClient api) {
+        this(api, null);
+    }
+
+    /**
+     * Edit-existing constructor. Pass a Recipe to load its ingredients +
+     * cooked weight into the form; OK then PUTs. Pass {@code null} for the
+     * "new recipe" flow.
+     */
+    public RecipeBuilderDialog(ApiClient api, Recipe editing) {
         this.api = api;
-        setTitle("New recipe");
-        setHeaderText("Build a recipe by adding ingredients with their amount in grams.");
+        this.editing = editing;
+        boolean isEdit = editing != null;
+        setTitle(isEdit ? "Edit recipe" : "New recipe");
+        setHeaderText(isEdit
+                ? "Edit ingredients and cooked weight. Public seed recipes are read-only — edit your own copy."
+                : "Build a recipe by adding ingredients with their amount in grams.");
         com.calorietracker.desktop.AppContext.prepareDialog(this);
 
         nameField.setPromptText("e.g. Mediterranean salad");
@@ -74,7 +91,9 @@ public class RecipeBuilderDialog extends Dialog<Recipe> {
         searchTable.getColumns().add(sNameCol);
         searchTable.getColumns().add(sKcalCol);
         searchTable.getColumns().add(sFibCol);
-        searchTable.setPrefHeight(200);
+        searchTable.setPrefHeight(360);
+        searchTable.setMinHeight(280);
+        javafx.scene.layout.VBox.setVgrow(searchTable, javafx.scene.layout.Priority.ALWAYS);
         Label sEmpty = new Label("No foods match. Click \"+ New food\" to create one.");
         sEmpty.getStyleClass().add("muted");
         searchTable.setPlaceholder(sEmpty);
@@ -90,7 +109,10 @@ public class RecipeBuilderDialog extends Dialog<Recipe> {
         Button addRowBtn = new Button("Add to recipe");
         addRowBtn.getStyleClass().add("primary-button");
         addRowBtn.setOnAction(e -> addLineFromSelection());
+        amountField.setPrefWidth(80);
+        javafx.scene.layout.HBox.setHgrow(searchField, javafx.scene.layout.Priority.ALWAYS);
         HBox addBar = new HBox(8, searchField, new Label("Amount (g):"), amountField, addRowBtn, newIngBtn);
+        addBar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
 
         // ---------------- lines table (the actual recipe) ----------------
         TableColumn<LineRow, String> lnIngCol = new TableColumn<>("Food");
@@ -125,19 +147,57 @@ public class RecipeBuilderDialog extends Dialog<Recipe> {
         lEmpty.getStyleClass().add("muted");
         linesTable.setPlaceholder(lEmpty);
 
+        cookedGramsField.setPromptText("auto from sum of raw");
+        cookedGramsField.setPrefWidth(120);
+        // Track whether the user has explicitly entered a cooked weight; if not,
+        // we keep auto-syncing the field to the raw sum as they add ingredients.
+        cookedGramsField.textProperty().addListener((obs, oldV, newV) -> {
+            if (cookedGramsField.isFocused()) cookedGramsTouched = true;
+            recomputeTotals();
+        });
+
+        Label hint = new Label(
+                "Override the cooked weight if cooking changes the dish weight " +
+                "(pasta absorbing water, meat losing it). Per-100g values are " +
+                "based on the cooked weight.");
+        hint.setWrapText(true);
+        hint.setMaxWidth(Double.MAX_VALUE);
+        hint.getStyleClass().add("muted");
+
         GridPane header = new GridPane();
         header.setHgap(10);
         header.setVgap(8);
         header.addRow(0, new Label("Name:"), nameField);
-        header.addRow(1, new Label("Servings:"), servingsSpinner);
+        header.addRow(1, new Label("Cooked weight (g):"), cookedGramsField);
+        header.add(hint, 0, 2, 2, 1);
+        javafx.scene.layout.ColumnConstraints col0 = new javafx.scene.layout.ColumnConstraints();
+        col0.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        javafx.scene.layout.ColumnConstraints col1 = new javafx.scene.layout.ColumnConstraints();
+        col1.setHgrow(javafx.scene.layout.Priority.ALWAYS);
+        header.getColumnConstraints().addAll(col0, col1);
+        javafx.scene.layout.GridPane.setHgrow(nameField, javafx.scene.layout.Priority.ALWAYS);
 
         totalsLabel.getStyleClass().add("entry-name");
+        per100gLabel.getStyleClass().add("entry-name");
+        totalsLabel.setWrapText(true);
+        per100gLabel.setWrapText(true);
+        totalsLabel.setMaxWidth(Double.MAX_VALUE);
+        per100gLabel.setMaxWidth(Double.MAX_VALUE);
+
+        Label findFoods = new Label("Find foods");
+        findFoods.getStyleClass().add("section-title");
+        Label recipeIngs = new Label("Recipe ingredients");
+        recipeIngs.getStyleClass().add("section-title");
+
+        linesTable.setPrefHeight(180);
+        linesTable.setMinHeight(150);
 
         VBox box = new VBox(12, header, new Separator(),
-                new Label("Find foods"), searchTable, ingredientPager.loadMoreBar(), addBar, new Separator(),
-                new Label("Recipe ingredients"), linesTable, totalsLabel);
+                findFoods, searchTable, ingredientPager.loadMoreBar(), addBar, new Separator(),
+                recipeIngs, linesTable, totalsLabel, per100gLabel);
         box.setPadding(new Insets(14));
-        box.setPrefSize(820, 760);
+        box.setPrefSize(900, 820);
+        box.setMinWidth(680);
         getDialogPane().setContent(box);
         getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
 
@@ -163,8 +223,12 @@ public class RecipeBuilderDialog extends Dialog<Recipe> {
                 for (LineRow r : lines) {
                     apiLines.add(new CreateRecipeRequest.Line(r.ingredient.id(), r.amountGrams));
                 }
-                createdHolder[0] = api.createRecipe(new CreateRecipeRequest(
-                        nameField.getText().trim(), servingsSpinner.getValue(), apiLines));
+                double cookedGrams = parseCookedGramsOr(rawSum());
+                CreateRecipeRequest payload = new CreateRecipeRequest(
+                        nameField.getText().trim(), 1, apiLines, cookedGrams);
+                createdHolder[0] = (editing != null)
+                        ? api.updateRecipe(editing.id(), payload)
+                        : api.createRecipe(payload);
             } catch (Exception e) {
                 Async.showError(e);
                 ev.consume();
@@ -174,6 +238,26 @@ public class RecipeBuilderDialog extends Dialog<Recipe> {
         setResultConverter(bt -> bt == ButtonType.OK ? createdHolder[0] : null);
 
         ingredientPager.resetAndLoad("");
+
+        // ---------------- pre-fill when editing an existing recipe ----------------
+        if (editing != null) {
+            nameField.setText(editing.name() == null ? "" : editing.name());
+            // User-edited the cooked weight at create-time → preserve it; the
+            // listener flag prevents the auto-sync from overwriting on first add.
+            cookedGramsTouched = true;
+            if (editing.totalCookedGrams() > 0) {
+                cookedGramsField.setText(String.format("%.0f", editing.totalCookedGrams()));
+            }
+            // Load each ingredient by id, then append a LineRow. Async so we
+            // don't block the dialog's first paint; recomputeTotals runs after
+            // each row arrives so the totals are correct even mid-fetch.
+            for (com.calorietracker.desktop.model.Recipe.Line ln : editing.ingredients()) {
+                Async.run(() -> api.getIngredient(ln.ingredientId()), ing -> {
+                    lines.add(new LineRow(ing, ln.amountGrams()));
+                    recomputeTotals();
+                });
+            }
+        }
     }
 
     private void addLineFromSelection() {
@@ -201,8 +285,46 @@ public class RecipeBuilderDialog extends Dialog<Recipe> {
             f   += r.ingredient.fatPer100g()     * factor;
             fib += r.ingredient.fiberPer100g()   * factor;
         }
+        double rawGrams = rawSum();
+        // Keep the cooked-weight input in sync with raw sum until the user
+        // explicitly edits it.
+        if (!cookedGramsTouched) {
+            String autoVal = rawGrams > 0 ? String.format("%.0f", rawGrams) : "";
+            if (!autoVal.equals(cookedGramsField.getText())) {
+                cookedGramsField.setText(autoVal);
+            }
+        }
+        double cooked = parseCookedGramsOr(rawGrams);
+
         totalsLabel.setText(String.format(
-                "Totals: %d kcal  ·  P %.1f g  ·  C %.1f g  ·  F %.1f g  ·  Fiber %.1f g",
-                Math.round(k), p, c, f, fib));
+                "Raw totals: %d kcal  ·  P %.1f g  ·  C %.1f g  ·  F %.1f g  ·  Fiber %.1f g  (raw %.0f g, cooked %.0f g)",
+                Math.round(k), p, c, f, fib, rawGrams, cooked));
+
+        if (cooked <= 0) {
+            per100gLabel.setText("Per 100 g (cooked): —");
+        } else {
+            double m = 100.0 / cooked;
+            per100gLabel.setText(String.format(
+                    "Per 100 g (cooked): %d kcal  ·  P %.1f g  ·  C %.1f g  ·  F %.1f g  ·  Fiber %.1f g",
+                    Math.round(k * m), p * m, c * m, f * m, fib * m));
+        }
+    }
+
+    private double rawSum() {
+        double s = 0;
+        for (LineRow r : lines) s += r.amountGrams;
+        return s;
+    }
+
+    /** Parse the cooked-weight input, falling back to {@code defaultGrams} on any problem. */
+    private double parseCookedGramsOr(double defaultGrams) {
+        String raw = cookedGramsField.getText();
+        if (raw == null || raw.isBlank()) return defaultGrams;
+        try {
+            double v = Double.parseDouble(raw.trim().replace(',', '.'));
+            return v > 0 ? v : defaultGrams;
+        } catch (NumberFormatException e) {
+            return defaultGrams;
+        }
     }
 }

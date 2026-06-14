@@ -71,7 +71,7 @@ public class RecipeService {
         r.setServings(req.servings() == null ? 1 : req.servings());
         r.setOwnerUserId(me.getId());
 
-        double kcal = 0, protein = 0, carbs = 0, fat = 0, fiber = 0;
+        double kcal = 0, protein = 0, carbs = 0, fat = 0, fiber = 0, rawGrams = 0;
         for (CreateRecipeRequest.Line line : req.ingredients()) {
             Ingredient ing = ingredients.findById(line.ingredientId())
                     .orElseThrow(() -> new ResourceNotFoundException("Ingredient " + line.ingredientId() + " not found"));
@@ -91,6 +91,7 @@ public class RecipeService {
             carbs   += ing.getCarbsPer100g()   * factor;
             fat     += ing.getFatPer100g()     * factor;
             fiber   += ing.getFiberPer100g()   * factor;
+            rawGrams += line.amountGrams();
         }
 
         r.setTotalKcal((int) Math.round(kcal));
@@ -98,6 +99,11 @@ public class RecipeService {
         r.setTotalCarbs(round1(carbs));
         r.setTotalFat(round1(fat));
         r.setTotalFiber(round1(fiber));
+        // If the client didn't send a cooked-weight, fall back to raw sum so
+        // per-100g math stays usable.
+        double cookedGrams = req.totalCookedGrams() == null || req.totalCookedGrams() <= 0
+                ? rawGrams : req.totalCookedGrams();
+        r.setTotalCookedGrams(round1(cookedGrams));
         return recipes.save(r);
     }
 
@@ -114,7 +120,7 @@ public class RecipeService {
         r.setServings(blueprint.servings() == null ? 1 : Math.max(1, blueprint.servings()));
         r.setOwnerUserId(me.getId());
 
-        double kcal = 0, protein = 0, carbs = 0, fat = 0, fiber = 0;
+        double kcal = 0, protein = 0, carbs = 0, fat = 0, fiber = 0, rawGrams = 0;
         if (blueprint.ingredients() != null) {
             for (ParsedRecipeIngredient ai : blueprint.ingredients()) {
                 Ingredient ing = new Ingredient();
@@ -139,6 +145,7 @@ public class RecipeService {
                 carbs   += ai.carbsPer100g()   * factor;
                 fat     += ai.fatPer100g()     * factor;
                 fiber   += ai.fiberPer100g()   * factor;
+                rawGrams += ai.amountGrams();
             }
         }
         r.setTotalKcal((int) Math.round(kcal));
@@ -146,6 +153,62 @@ public class RecipeService {
         r.setTotalCarbs(round1(carbs));
         r.setTotalFat(round1(fat));
         r.setTotalFiber(round1(fiber));
+        // Use the user-supplied cooked weight if present; otherwise fall back to raw sum.
+        double cookedGrams = blueprint.totalCookedGrams() == null || blueprint.totalCookedGrams() <= 0
+                ? rawGrams : blueprint.totalCookedGrams();
+        r.setTotalCookedGrams(round1(cookedGrams));
+        return recipes.save(r);
+    }
+
+    /** Replace name + ingredient lines + cooked-weight of an owned recipe. Same math as create. */
+    @Transactional
+    public Recipe update(Long id, CreateRecipeRequest req) {
+        Recipe r = recipes.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Recipe " + id + " not found"));
+        AppUser me = currentUser.current();
+        if (r.getOwnerUserId() == null) {
+            throw new IllegalStateException("Cannot edit a public recipe.");
+        }
+        if (!r.getOwnerUserId().equals(me.getId())) {
+            throw new ResourceNotFoundException("Recipe " + id + " not found");
+        }
+
+        r.setName(req.name());
+        r.setServings(req.servings() == null ? r.getServings() : req.servings());
+        // Replace the entire line set. orphanRemoval=true on the relationship
+        // means clearing + adding is enough — Hibernate deletes the old rows.
+        r.getIngredients().clear();
+
+        double kcal = 0, protein = 0, carbs = 0, fat = 0, fiber = 0, rawGrams = 0;
+        for (CreateRecipeRequest.Line line : req.ingredients()) {
+            Ingredient ing = ingredients.findById(line.ingredientId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Ingredient " + line.ingredientId() + " not found"));
+            if (ing.getOwnerUserId() != null && !ing.getOwnerUserId().equals(me.getId())) {
+                throw new ResourceNotFoundException("Ingredient " + line.ingredientId() + " not found");
+            }
+            RecipeIngredient ri = new RecipeIngredient();
+            ri.setRecipe(r);
+            ri.setIngredient(ing);
+            ri.setAmountGrams(line.amountGrams());
+            r.getIngredients().add(ri);
+
+            double factor = line.amountGrams() / 100.0;
+            kcal    += ing.getKcalPer100g()    * factor;
+            protein += ing.getProteinPer100g() * factor;
+            carbs   += ing.getCarbsPer100g()   * factor;
+            fat     += ing.getFatPer100g()     * factor;
+            fiber   += ing.getFiberPer100g()   * factor;
+            rawGrams += line.amountGrams();
+        }
+
+        r.setTotalKcal((int) Math.round(kcal));
+        r.setTotalProtein(round1(protein));
+        r.setTotalCarbs(round1(carbs));
+        r.setTotalFat(round1(fat));
+        r.setTotalFiber(round1(fiber));
+        double cookedGrams = req.totalCookedGrams() == null || req.totalCookedGrams() <= 0
+                ? rawGrams : req.totalCookedGrams();
+        r.setTotalCookedGrams(round1(cookedGrams));
         return recipes.save(r);
     }
 

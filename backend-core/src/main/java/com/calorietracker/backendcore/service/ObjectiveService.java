@@ -88,16 +88,13 @@ public class ObjectiveService {
     /**
      * Objective in effect on the given date.
      * <p>
-     * If a snapshot exists with {@code effectiveDate <= date}, use the latest such snapshot.
-     * Otherwise (the date predates the user's first save), extend the <b>earliest</b> snapshot
-     * backward. This is what makes the "past objectives never change" property hold:
-     * once a snapshot is written, future edits update only today's row, so historical
-     * lookups remain stable.
+     * Returns the latest snapshot whose {@code effectiveDate <= date}. When the
+     * date predates the user's <em>first</em> save, returns {@link Optional#empty()} —
+     * the past is fixed and "no goal was set yet" must not be back-filled by today's
+     * choices. Callers treat empty as zero targets for that day.
      */
     @Transactional(readOnly = true)
     public Optional<ObjectiveHistory> objectiveOn(Long userId, LocalDate date) {
-        Optional<ObjectiveHistory> exact = history.findEffectiveOn(userId, date);
-        if (exact.isPresent()) return exact;
-        return history.findFirstByUserIdOrderByEffectiveDateAsc(userId);
+        return history.findEffectiveOn(userId, date);
     }
 }

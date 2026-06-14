@@ -85,6 +85,14 @@ Resources:
                 Resource:
                   - !GetAtt ArtifactBucket.Arn
                   - !Sub '${ArtifactBucket.Arn}/*'
+              # CodeBuild pulls the full git ref (CODEBUILD_CLONE_REF mode) so
+              # the buildspec can `git diff` to skip phases when nothing relevant changed.
+              - Effect: Allow
+                Action: codestar-connections:UseConnection
+                Resource: !Ref GitHubConnectionArn
+              - Effect: Allow
+                Action: codeconnections:UseConnection
+                Resource: !Ref GitHubConnectionArn
 
   CodePipelineRole:
     Type: AWS::IAM::Role
@@ -112,6 +120,10 @@ Resources:
               - Effect: Allow
                 Action: codestar-connections:UseConnection
                 Resource: !Ref GitHubConnectionArn
+              # Required so CodePipeline can pass git-clone metadata to CodeBuild
+              - Effect: Allow
+                Action: codeconnections:UseConnection
+                Resource: !Ref GitHubConnectionArn
 
   # ---------------- CodeBuild ----------------
   BuildProject:
@@ -132,6 +144,9 @@ Resources:
           - { Name: ECR, Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com' }
       Source:
         Type: CODEPIPELINE
+        # Source action delivers a CODEBUILD_CLONE_REF artifact => CodeBuild does
+        # the actual git clone with full history, which lets us diff this commit
+        # against the previous one and skip rebuilds when nothing changed.
         BuildSpec: |
           version: 0.2
           phases:
@@ -140,29 +155,63 @@ Resources:
                 java: corretto21
             pre_build:
               commands:
-                - echo Running unit tests on every Maven module...
                 - |
+                  echo "Detecting which backend services changed..."
+                  if git rev-parse HEAD~1 >/dev/null 2>&1; then
+                    CHANGED=$(git diff --name-only HEAD~1 HEAD)
+                  else
+                    CHANGED="eureka-server/ api-gateway/ backend-core/ ai-service/"
+                  fi
+                  echo "Changed files:"
+                  echo "$CHANGED"
+                  > /tmp/services_to_build
                   for svc in eureka-server api-gateway backend-core ai-service; do
-                    echo "Testing $svc...";
-                    (cd $svc && mvn -B -q test);
+                    if echo "$CHANGED" | grep -qE "^${svc}/"; then
+                      echo "$svc" >> /tmp/services_to_build
+                    fi
                   done
-                - echo Logging in to ECR...
-                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
+                  if echo "$CHANGED" | grep -qE "^(infra/buildspec|infra/cloudformation/05-cicd)"; then
+                    printf 'eureka-server\napi-gateway\nbackend-core\nai-service\n' > /tmp/services_to_build
+                  fi
+                  if [ ! -s /tmp/services_to_build ]; then
+                    echo "==> No backend source changed (likely docs / infra only). Skipping build."
+                    touch /tmp/skip_build
+                  else
+                    echo "==> Will rebuild:"; cat /tmp/services_to_build
+                  fi
+                - |
+                  if [ -f /tmp/skip_build ]; then exit 0; fi
+                  echo "Running mvn test on services to rebuild..."
+                  for svc in $(cat /tmp/services_to_build); do
+                    echo "── Testing ${svc} ──"
+                    (cd $svc && mvn -B -q test)
+                  done
+                - |
+                  if [ -f /tmp/skip_build ]; then exit 0; fi
+                  aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
             build:
               commands:
                 - |
-                  for svc in eureka-server api-gateway backend-core ai-service; do
-                    echo "Building $svc...";
-                    docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc;
-                    docker push $ECR/$PROJECT-$svc:latest;
+                  if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
+                  for svc in $(cat /tmp/services_to_build); do
+                    echo "── Building ${svc} ──"
+                    docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc
+                    docker push $ECR/$PROJECT-$svc:latest
                   done
             post_build:
               commands:
-                - echo Forcing new ECS deployments...
-                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-eureka  --force-new-deployment
-                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-gateway --force-new-deployment
-                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-core    --force-new-deployment
-                - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-ai      --force-new-deployment
+                - |
+                  if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
+                  for svc in $(cat /tmp/services_to_build); do
+                    case "$svc" in
+                      eureka-server) ecs_svc="$PROJECT-eureka" ;;
+                      api-gateway)   ecs_svc="$PROJECT-gateway" ;;
+                      backend-core)  ecs_svc="$PROJECT-core" ;;
+                      ai-service)    ecs_svc="$PROJECT-ai" ;;
+                    esac
+                    echo "── Redeploying ${ecs_svc} ──"
+                    aws ecs update-service --cluster $PROJECT-cluster --service "$ecs_svc" --force-new-deployment
+                  done
 
   # ---------------- CodePipeline ----------------
   Pipeline:
@@ -191,7 +240,9 @@ Resources:
                 FullRepositoryId: !Ref GitHubFullRepo
                 BranchName: !Ref GitHubBranch
                 DetectChanges: 'true'
-                OutputArtifactFormat: CODE_ZIP
+                # FULL_CLONE pulls .git history so the buildspec can run
+                # `git diff HEAD~1 HEAD` to skip rebuilds when nothing changed.
+                OutputArtifactFormat: CODEBUILD_CLONE_REF
               OutputArtifacts: [{ Name: SourceOutput }]
         - Name: BuildAndDeploy
           Actions:

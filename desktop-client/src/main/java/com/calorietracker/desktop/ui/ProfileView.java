@@ -65,11 +65,13 @@ public class ProfileView extends BorderPane {
         saveBtn.setOnAction(e -> save());
         savedHint.getStyleClass().add("muted");
         HBox saveRow = new HBox(12, saveBtn, savedHint);
-        saveRow.setAlignment(Pos.CENTER_LEFT);
+        saveRow.setAlignment(Pos.CENTER);
 
         VBox formCard = new VBox(14, sectionTitle("Your stats"), form, saveRow);
         formCard.getStyleClass().add("card");
         formCard.setMaxWidth(540);
+        formCard.setAlignment(Pos.CENTER);
+        form.setAlignment(Pos.CENTER);
 
         // ---- BMR / TDEE card ----
         Label bmrTitle = new Label("BMR");

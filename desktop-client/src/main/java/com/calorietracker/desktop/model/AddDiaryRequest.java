@@ -24,6 +24,10 @@ public record AddDiaryRequest(
     public static AddDiaryRequest recipe(String date, Meal m, long id, double servings) {
         return new AddDiaryRequest(date, m, null, null, id, servings, null, null, null, null, null, null);
     }
+    /** Recipe entry by grams of cooked food — preferred over the legacy servings path. */
+    public static AddDiaryRequest recipeGrams(String date, Meal m, long id, double grams) {
+        return new AddDiaryRequest(date, m, null, grams, id, null, null, null, null, null, null, null);
+    }
     public static AddDiaryRequest custom(String date, Meal m, String name, int kcal,
                                          double protein, double carbs, double fat, double fiber) {
         return new AddDiaryRequest(date, m, null, null, null, null, name, kcal, protein, carbs, fat, fiber);

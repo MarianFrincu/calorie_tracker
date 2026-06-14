@@ -45,24 +45,27 @@ public class RecipesView extends BorderPane {
         Button searchBtn = new Button("Search");
         Button newBtn = new Button("+ New recipe");
         newBtn.getStyleClass().add("primary-button");
+        Button editBtn = new Button("Edit selected");
         Button delBtn = new Button("Delete selected");
 
         TableView<Recipe> table = new TableView<>();
         TableColumn<Recipe, String> nameCol = new TableColumn<>("Name");
         nameCol.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().name()));
         nameCol.setPrefWidth(240);
-        TableColumn<Recipe, String> servCol = new TableColumn<>("Servings");
-        servCol.setCellValueFactory(c -> new SimpleStringProperty(String.valueOf(c.getValue().servings())));
-        TableColumn<Recipe, String> kcalCol = new TableColumn<>("kcal");
-        kcalCol.setCellValueFactory(c -> new SimpleStringProperty(String.valueOf(c.getValue().totalKcal())));
-        TableColumn<Recipe, String> proCol = new TableColumn<>("Protein");
-        proCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().totalProtein()) + " g"));
-        TableColumn<Recipe, String> carbCol = new TableColumn<>("Carbs");
-        carbCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().totalCarbs()) + " g"));
-        TableColumn<Recipe, String> fatCol = new TableColumn<>("Fat");
-        fatCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().totalFat()) + " g"));
-        TableColumn<Recipe, String> fibCol = new TableColumn<>("Fiber");
-        fibCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().totalFiber()) + " g"));
+        TableColumn<Recipe, String> cookedCol = new TableColumn<>("Cooked (g)");
+        cookedCol.setCellValueFactory(c -> new SimpleStringProperty(
+                String.format("%.0f", c.getValue().effectiveCookedGrams())));
+        TableColumn<Recipe, String> kcalCol = new TableColumn<>("kcal/100g");
+        kcalCol.setCellValueFactory(c -> new SimpleStringProperty(
+                String.valueOf((int) Math.round(c.getValue().kcalPer100g()))));
+        TableColumn<Recipe, String> proCol = new TableColumn<>("P/100g");
+        proCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().proteinPer100g()) + " g"));
+        TableColumn<Recipe, String> carbCol = new TableColumn<>("C/100g");
+        carbCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().carbsPer100g()) + " g"));
+        TableColumn<Recipe, String> fatCol = new TableColumn<>("F/100g");
+        fatCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().fatPer100g()) + " g"));
+        TableColumn<Recipe, String> fibCol = new TableColumn<>("Fib/100g");
+        fibCol.setCellValueFactory(c -> new SimpleStringProperty(AiView.fmt(c.getValue().fiberPer100g()) + " g"));
         TableColumn<Recipe, String> ingCol = new TableColumn<>("Ingredients");
         ingCol.setCellValueFactory(c -> new SimpleStringProperty(
                 c.getValue().ingredients().stream()
@@ -70,7 +73,7 @@ public class RecipesView extends BorderPane {
                         .reduce((a, b) -> a + ", " + b).orElse("(none)")));
         ingCol.setPrefWidth(360);
         table.getColumns().add(nameCol);
-        table.getColumns().add(servCol);
+        table.getColumns().add(cookedCol);
         table.getColumns().add(kcalCol);
         table.getColumns().add(proCol);
         table.getColumns().add(carbCol);
@@ -88,6 +91,19 @@ public class RecipesView extends BorderPane {
         search.setOnAction(e -> pager.resetAndLoad(search.getText()));
         newBtn.setOnAction(e -> new RecipeBuilderDialog(api).showAndWait()
                 .ifPresent(created -> pager.resetAndLoad(search.getText())));
+        editBtn.setOnAction(e -> {
+            Recipe r = table.getSelectionModel().getSelectedItem();
+            if (r == null) {
+                Async.showWarning("Pick a recipe from the list first.");
+                return;
+            }
+            if (r.isPublic()) {
+                Async.showWarning("Public recipes are read-only. Create your own copy via + New recipe.");
+                return;
+            }
+            new RecipeBuilderDialog(api, r).showAndWait()
+                    .ifPresent(updated -> pager.resetAndLoad(search.getText()));
+        });
         delBtn.setOnAction(e -> {
             Recipe r = table.getSelectionModel().getSelectedItem();
             if (r == null) return;
@@ -97,7 +113,7 @@ public class RecipesView extends BorderPane {
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox toolbar = new HBox(8, search, searchBtn, spacer, delBtn, newBtn);
+        HBox toolbar = new HBox(8, search, searchBtn, spacer, editBtn, delBtn, newBtn);
         toolbar.setAlignment(Pos.CENTER_LEFT);
         toolbar.getStyleClass().add("toolbar");
 
@@ -121,6 +137,7 @@ public class RecipesView extends BorderPane {
         Button searchBtn = new Button("Search");
         Button newBtn = new Button("+ New food");
         newBtn.getStyleClass().add("primary-button");
+        Button editBtn = new Button("Edit selected");
         Button delBtn = new Button("Delete selected");
 
         TableView<Ingredient> table = new TableView<>();
@@ -158,6 +175,19 @@ public class RecipesView extends BorderPane {
         search.setOnAction(e -> pager.resetAndLoad(search.getText()));
         newBtn.setOnAction(e -> new IngredientEditorDialog(api).showAndWait()
                 .ifPresent(created -> pager.resetAndLoad(search.getText())));
+        editBtn.setOnAction(e -> {
+            Ingredient ing = table.getSelectionModel().getSelectedItem();
+            if (ing == null) {
+                Async.showWarning("Pick a food from the list first.");
+                return;
+            }
+            if (ing.isPublic()) {
+                Async.showWarning("Public foods are read-only. Create your own copy via + New food.");
+                return;
+            }
+            new IngredientEditorDialog(api, ing).showAndWait()
+                    .ifPresent(updated -> pager.resetAndLoad(search.getText()));
+        });
         delBtn.setOnAction(e -> {
             Ingredient ing = table.getSelectionModel().getSelectedItem();
             if (ing == null) return;
@@ -167,7 +197,7 @@ public class RecipesView extends BorderPane {
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox toolbar = new HBox(8, search, searchBtn, spacer, delBtn, newBtn);
+        HBox toolbar = new HBox(8, search, searchBtn, spacer, editBtn, delBtn, newBtn);
         toolbar.setAlignment(Pos.CENTER_LEFT);
         toolbar.getStyleClass().add("toolbar");
 

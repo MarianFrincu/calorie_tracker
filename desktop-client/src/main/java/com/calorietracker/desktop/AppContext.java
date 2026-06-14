@@ -37,7 +37,14 @@ public final class AppContext {
     public static void prepareDialog(Dialog<?> dialog) {
         Stage parent = mainStage;
         if (parent == null || dialog == null) return;
-        if (dialog.getOwner() == null) dialog.initOwner(parent);
+        // Only set the owner once the main stage has a Scene attached. During
+        // the initial sign-in flow the dialog opens BEFORE start() builds the
+        // main scene, and JavaFX's HeavyweightDialog dereferences
+        // owner.getScene().getStylesheets() unconditionally -> NPE. Opening
+        // ownerless on first launch is fine; the dialog is the only window.
+        if (dialog.getOwner() == null && parent.getScene() != null) {
+            dialog.initOwner(parent);
+        }
         // WINDOW_MODAL ties the dialog more tightly to the parent Window than
         // the default APPLICATION_MODAL, which on Linux WMs reduces the chance
         // the parent gets resized when the child appears.

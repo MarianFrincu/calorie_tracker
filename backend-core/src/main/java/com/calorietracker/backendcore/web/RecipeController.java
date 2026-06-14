@@ -63,6 +63,13 @@ public class RecipeController {
         return ResponseEntity.created(URI.create("/api/recipes/" + body.id())).body(body);
     }
 
+    /** Update an owned recipe (name, ingredients, cooked-weight). Public seed recipes are read-only. */
+    @org.springframework.web.bind.annotation.PutMapping("/{id}")
+    public RecipeResponse update(@PathVariable Long id,
+                                 @Valid @RequestBody CreateRecipeRequest req) {
+        return RecipeResponse.of(service.update(id, req));
+    }
+
     /**
      * Persists a recipe blueprint produced by the AI service: creates each
      * ingredient + the recipe in a single transaction.

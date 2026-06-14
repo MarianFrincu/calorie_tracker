@@ -19,7 +19,6 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
-import javafx.scene.control.Spinner;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.input.KeyCode;
@@ -366,21 +365,39 @@ public class AiView extends BorderPane {
         bubble.setPrefWidth(840);
         bubble.setMaxWidth(960);
 
-        Label header = new Label("Recipe blueprint - edit name/servings before saving if you like");
+        Label header = new Label("Recipe blueprint — edit name + cooked weight before saving if you like");
         header.getStyleClass().add("card-title");
         bubble.getChildren().add(header);
 
+        // Raw sum of ingredient grams — used as the default cooked-weight.
+        double rawGrams = 0;
+        if (result.ingredients() != null) {
+            for (ParsedRecipeIngredient i : result.ingredients()) rawGrams += i.amountGrams();
+        }
+
         TextField nameField = new TextField(result.name() == null ? "My recipe" : result.name());
         nameField.setPrefWidth(360);
-        Spinner<Integer> servingsSpinner = new Spinner<>(1, 99, result.servings() == null ? 1 : result.servings());
-        servingsSpinner.setEditable(true);
-        servingsSpinner.setPrefWidth(80);
+        TextField cookedGramsField = new TextField(rawGrams > 0 ? String.format("%.0f", rawGrams) : "");
+        cookedGramsField.setPromptText("auto from sum of raw");
+        cookedGramsField.setPrefWidth(120);
+        boolean[] cookedTouched = {false};
+        cookedGramsField.focusedProperty().addListener((obs, was, isFocused) -> {
+            if (isFocused) cookedTouched[0] = true;
+        });
+
         HBox nameRow = new HBox(8,
                 new Label("Name:"), nameField,
-                new Label("Servings:"), servingsSpinner);
+                new Label("Cooked (g):"), cookedGramsField);
         nameRow.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(nameField, Priority.ALWAYS);
         bubble.getChildren().add(nameRow);
+
+        Label hint = new Label(
+                "Cooked weight = raw sum by default. Override if cooking changes the dish weight " +
+                "(pasta absorbs water, meat loses it). Per-100g values below are based on the cooked weight.");
+        hint.setWrapText(true);
+        hint.getStyleClass().add("muted");
+        bubble.getChildren().add(hint);
 
         double k = 0, p = 0, c = 0, f = 0, fib = 0;
         if (result.ingredients() == null || result.ingredients().isEmpty()) {
@@ -396,22 +413,46 @@ public class AiView extends BorderPane {
                 fib += i.fiberPer100g()   * factor;
             }
         }
-        Label totals = new Label(String.format(
-                "Recipe totals: %d kcal  ·  P %.1f g  ·  C %.1f g  ·  F %.1f g  ·  Fiber %.1f g",
-                Math.round(k), p, c, f, fib));
-        totals.getStyleClass().add("entry-name");
-        bubble.getChildren().add(totals);
+        final double kcalTotal = k, proTotal = p, carTotal = c, fatTotal = f, fibTotal = fib;
+        final double rawSum = rawGrams;
+
+        Label rawTotals = new Label(String.format(
+                "Raw totals: %d kcal  ·  P %.1f g  ·  C %.1f g  ·  F %.1f g  ·  Fiber %.1f g  (raw %.0f g)",
+                Math.round(kcalTotal), proTotal, carTotal, fatTotal, fibTotal, rawSum));
+        rawTotals.getStyleClass().add("entry-name");
+        rawTotals.setWrapText(true);
+        bubble.getChildren().add(rawTotals);
+
+        Label per100g = new Label();
+        per100g.getStyleClass().add("entry-name");
+        per100g.setWrapText(true);
+        Runnable refreshPer100g = () -> {
+            double cooked = parseCookedOr(cookedGramsField.getText(), rawSum);
+            if (cooked <= 0) {
+                per100g.setText("Per 100 g (cooked): —");
+            } else {
+                double m = 100.0 / cooked;
+                per100g.setText(String.format(
+                        "Per 100 g (cooked): %d kcal  ·  P %.1f g  ·  C %.1f g  ·  F %.1f g  ·  Fiber %.1f g  (cooked %.0f g)",
+                        Math.round(kcalTotal * m), proTotal * m, carTotal * m, fatTotal * m, fibTotal * m, cooked));
+            }
+        };
+        cookedGramsField.textProperty().addListener((obs, oldV, newV) -> refreshPer100g.run());
+        refreshPer100g.run();
+        bubble.getChildren().add(per100g);
 
         Button saveBtn = new Button("Save as recipe");
         saveBtn.getStyleClass().add("success-button");
         saveBtn.setMinWidth(Region.USE_PREF_SIZE);
         saveBtn.setOnAction(e -> {
             saveBtn.setDisable(true);
-            saveBtn.setText("Saving...");
+            saveBtn.setText("Saving…");
+            double cooked = parseCookedOr(cookedGramsField.getText(), rawSum);
             ParsedRecipe blueprint = new ParsedRecipe(
                     nameField.getText().trim().isEmpty() ? "My recipe" : nameField.getText().trim(),
-                    servingsSpinner.getValue(),
-                    result.ingredients());
+                    1,
+                    result.ingredients(),
+                    cooked > 0 ? cooked : null);
             Async.run(() -> api.saveAiRecipe(blueprint), saved -> {
                 saveBtn.setText("Saved as \"" + saved.name() + "\"");
             });
@@ -423,6 +464,17 @@ public class AiView extends BorderPane {
         HBox row = new HBox(bubble);
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    /** Parse the cooked-weight text field, falling back to a default on any error. */
+    private static double parseCookedOr(String raw, double defaultGrams) {
+        if (raw == null || raw.isBlank()) return defaultGrams;
+        try {
+            double v = Double.parseDouble(raw.trim().replace(',', '.'));
+            return v > 0 ? v : defaultGrams;
+        } catch (NumberFormatException e) {
+            return defaultGrams;
+        }
     }
 
     private HBox recipeItemRow(ParsedRecipeIngredient i) {

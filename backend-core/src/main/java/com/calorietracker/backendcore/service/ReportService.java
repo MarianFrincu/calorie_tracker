@@ -58,13 +58,17 @@ public class ReportService {
         while (!d.isAfter(to)) {
             Totals t = byDate.getOrDefault(d, new Totals());
             ObjectiveHistory obj = objectives.on(d);
+            // obj == null means the date predates the user's first objective save:
+            // the past must show zero targets, not retroactively inherit today's.
+            // Individual fields may also be null (objective saved before profile
+            // was filled → no kcal/macro targets computed) — coalesce those too.
             out.add(new DailyNutritionPoint(d,
                     t.kcal, round1(t.protein), round1(t.carbs), round1(t.fat), round1(t.fiber),
-                    obj == null ? me.getDailyCalorieTarget()   : obj.getDailyCalorieTarget(),
-                    obj == null ? me.getDailyProteinTargetG()  : obj.getDailyProteinTargetG(),
-                    obj == null ? me.getDailyCarbsTargetG()    : obj.getDailyCarbsTargetG(),
-                    obj == null ? me.getDailyFatTargetG()      : obj.getDailyFatTargetG(),
-                    obj == null ? me.getDailyFiberTargetG()    : obj.getDailyFiberTargetG()));
+                    obj == null ? 0 : nz(obj.getDailyCalorieTarget()),
+                    obj == null ? 0 : nz(obj.getDailyProteinTargetG()),
+                    obj == null ? 0 : nz(obj.getDailyCarbsTargetG()),
+                    obj == null ? 0 : nz(obj.getDailyFatTargetG()),
+                    obj == null ? 0 : nz(obj.getDailyFiberTargetG())));
             d = d.plusDays(1);
         }
         return out;
@@ -83,7 +87,8 @@ public class ReportService {
         LocalDate d = from;
         while (!d.isAfter(to)) {
             ObjectiveHistory obj = objectives.on(d);
-            Integer target = obj == null ? me.getDailyWaterTargetMl() : obj.getDailyWaterTargetMl();
+            // Past days that predate the first save: zero target, not back-fill.
+            int target = obj == null ? 0 : nz(obj.getDailyWaterTargetMl());
             out.add(new DailyWaterPoint(d, byDate.getOrDefault(d, 0), target));
             d = d.plusDays(1);
         }
@@ -99,10 +104,11 @@ public class ReportService {
     private ObjectiveResolver resolveObjectivesFor(AppUser me, LocalDate from, LocalDate to) {
         List<ObjectiveHistory> snapshots = new ArrayList<>(
                 objectiveHistory.findByUserIdAndEffectiveDateBetweenOrderByEffectiveDateAsc(me.getId(), from, to));
+        // Include the latest snapshot strictly before `from` — covers dates at
+        // the start of the range that inherit a prior (already-saved) objective.
         objectiveHistory.findEffectiveOn(me.getId(), from.minusDays(1)).ifPresent(snapshots::add);
-        objectiveHistory.findFirstByUserIdOrderByEffectiveDateAsc(me.getId())
-                .filter(s -> snapshots.stream().noneMatch(x -> x.getEffectiveDate().equals(s.getEffectiveDate())))
-                .ifPresent(snapshots::add);
+        // Do NOT inject the earliest snapshot anymore — past dates that predate
+        // the first save must show zero, not retroactively inherit today's goal.
         TreeMap<LocalDate, ObjectiveHistory> indexed = new TreeMap<>();
         for (ObjectiveHistory s : snapshots) indexed.put(s.getEffectiveDate(), s);
         return new ObjectiveResolver(indexed);
@@ -118,6 +124,9 @@ public class ReportService {
         }
         return out;
     }
+
+    /** Null-coalesce Integer fields to zero so unboxing never throws NPE. */
+    private static int nz(Integer v) { return v == null ? 0 : v; }
 
     private static double round1(double v) {
         return Math.round(v * 10.0) / 10.0;
@@ -149,10 +158,11 @@ public class ReportService {
         }
 
         ObjectiveHistory on(LocalDate date) {
+            // Latest snapshot with effectiveDate <= date. If none exists (date
+            // predates the user's very first save), return null — the caller
+            // treats that as a zero target so the past stays the past.
             Map.Entry<LocalDate, ObjectiveHistory> e = byDate.floorEntry(date);
-            if (e != null) return e.getValue();
-            // date is before every known snapshot - extend the earliest backward.
-            return byDate.isEmpty() ? null : byDate.firstEntry().getValue();
+            return e == null ? null : e.getValue();
         }
     }
 }

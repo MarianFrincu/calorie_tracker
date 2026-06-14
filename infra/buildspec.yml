@@ -1,6 +1,17 @@
-# Reference buildspec (the pipeline in 05-cicd.yaml uses an inline copy of this).
-# Builds all three images, pushes to ECR, and forces ECS redeployments.
+# Reference CodeBuild buildspec. The pipeline in 05-cicd.yaml uses an inline
+# copy of this. Keep them in sync.
+#
+# Behavior:
+#   1. Diff HEAD against HEAD~1 to figure out which backend service directories
+#      changed. README / c_t_docs / desktop-client changes => no backend build.
+#   2. If a buildspec or pipeline template change is detected, rebuild EVERYTHING
+#      (so the new flow takes effect on this commit).
+#   3. For each service in the rebuild list: `mvn test` -> `docker build/push` ->
+#      `ecs update-service --force-new-deployment`.
+#   4. If nothing relevant changed, the pipeline run is essentially a no-op.
+#
 # Expects env vars: AWS_DEFAULT_REGION, ACCOUNT_ID, PROJECT, ECR.
+
 version: 0.2
 phases:
   install:
@@ -8,26 +19,60 @@ phases:
       java: corretto21
   pre_build:
     commands:
-      - echo Running unit tests on every Maven module...
       - |
+        echo "Detecting which backend services changed..."
+        if git rev-parse HEAD~1 >/dev/null 2>&1; then
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+        else
+          CHANGED="eureka-server/ api-gateway/ backend-core/ ai-service/"
+        fi
+        echo "Changed files:"
+        echo "$CHANGED"
+        > /tmp/services_to_build
         for svc in eureka-server api-gateway backend-core ai-service; do
-          echo "Testing $svc...";
-          (cd $svc && mvn -B -q test);
+          if echo "$CHANGED" | grep -qE "^${svc}/"; then
+            echo "$svc" >> /tmp/services_to_build
+          fi
         done
-      - echo Logging in to ECR...
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
+        if echo "$CHANGED" | grep -qE "^(infra/buildspec|infra/cloudformation/05-cicd)"; then
+          printf 'eureka-server\napi-gateway\nbackend-core\nai-service\n' > /tmp/services_to_build
+        fi
+        if [ ! -s /tmp/services_to_build ]; then
+          echo "==> No backend source changed (likely docs / infra only). Skipping build."
+          touch /tmp/skip_build
+        else
+          echo "==> Will rebuild:"; cat /tmp/services_to_build
+        fi
+      - |
+        if [ -f /tmp/skip_build ]; then exit 0; fi
+        echo "Running mvn test on services to rebuild..."
+        for svc in $(cat /tmp/services_to_build); do
+          echo "── Testing ${svc} ──"
+          (cd $svc && mvn -B -q test)
+        done
+      - |
+        if [ -f /tmp/skip_build ]; then exit 0; fi
+        aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
   build:
     commands:
       - |
-        for svc in eureka-server api-gateway backend-core ai-service; do
-          echo "Building $svc...";
-          docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc;
-          docker push $ECR/$PROJECT-$svc:latest;
+        if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
+        for svc in $(cat /tmp/services_to_build); do
+          echo "── Building ${svc} ──"
+          docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc
+          docker push $ECR/$PROJECT-$svc:latest
         done
   post_build:
     commands:
-      - echo Forcing new ECS deployments...
-      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-eureka  --force-new-deployment
-      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-gateway --force-new-deployment
-      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-core    --force-new-deployment
-      - aws ecs update-service --cluster $PROJECT-cluster --service $PROJECT-ai      --force-new-deployment
+      - |
+        if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
+        for svc in $(cat /tmp/services_to_build); do
+          case "$svc" in
+            eureka-server) ecs_svc="$PROJECT-eureka" ;;
+            api-gateway)   ecs_svc="$PROJECT-gateway" ;;
+            backend-core)  ecs_svc="$PROJECT-core" ;;
+            ai-service)    ecs_svc="$PROJECT-ai" ;;
+          esac
+          echo "── Redeploying ${ecs_svc} ──"
+          aws ecs update-service --cluster $PROJECT-cluster --service "$ecs_svc" --force-new-deployment
+        done

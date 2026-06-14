@@ -148,8 +148,14 @@ public class ApiClient {
     public List<Ingredient> searchAllIngredients(String q, int page, int size) throws Exception {
         return getList(paged("/api/ingredients", q, page, size, "all"), Ingredient.class);
     }
+    public Ingredient getIngredient(long id) throws Exception {
+        return getJson("/api/ingredients/" + id, Ingredient.class);
+    }
     public Ingredient createIngredient(CreateIngredientRequest req) throws Exception {
         return postJson("/api/ingredients", req, Ingredient.class);
+    }
+    public Ingredient updateIngredient(long id, CreateIngredientRequest req) throws Exception {
+        return putJson("/api/ingredients/" + id, req, Ingredient.class);
     }
     public void deleteIngredient(long id) throws Exception { delete("/api/ingredients/" + id); }
 
@@ -165,6 +171,9 @@ public class ApiClient {
     public Recipe getRecipe(long id) throws Exception { return getJson("/api/recipes/" + id, Recipe.class); }
     public Recipe createRecipe(CreateRecipeRequest req) throws Exception {
         return postJson("/api/recipes", req, Recipe.class);
+    }
+    public Recipe updateRecipe(long id, CreateRecipeRequest req) throws Exception {
+        return putJson("/api/recipes/" + id, req, Recipe.class);
     }
     public void deleteRecipe(long id) throws Exception { delete("/api/recipes/" + id); }
 

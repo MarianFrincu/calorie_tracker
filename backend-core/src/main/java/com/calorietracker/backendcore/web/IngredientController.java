@@ -62,6 +62,13 @@ public class IngredientController {
         return ResponseEntity.created(URI.create("/api/ingredients/" + body.id())).body(body);
     }
 
+    /** Update an owned ingredient (name + per-100g macros). Public seed rows are read-only. */
+    @org.springframework.web.bind.annotation.PutMapping("/{id}")
+    public IngredientResponse update(@PathVariable Long id,
+                                     @Valid @RequestBody CreateIngredientRequest req) {
+        return IngredientResponse.of(service.update(id, req));
+    }
+
     /** Delete an owned ingredient. Refuses if it's still referenced by recipes. */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {

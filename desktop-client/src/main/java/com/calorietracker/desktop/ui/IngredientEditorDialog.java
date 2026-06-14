@@ -42,8 +42,20 @@ public class IngredientEditorDialog extends Dialog<Ingredient> {
     private final TextField fiberField   = numericField();
 
     public IngredientEditorDialog(ApiClient api) {
-        setTitle("New food");
-        setHeaderText("All values are per 100 g of the food (check the label).");
+        this(api, null);
+    }
+
+    /**
+     * Edit-existing constructor. Pass an Ingredient to pre-fill the form and
+     * persist via PUT instead of POST. Pass {@code null} for the
+     * "new ingredient" flow.
+     */
+    public IngredientEditorDialog(ApiClient api, Ingredient editing) {
+        final boolean isEdit = editing != null;
+        setTitle(isEdit ? "Edit food" : "New food");
+        setHeaderText(isEdit
+                ? "Per-100 g values. Public seed foods are read-only — edit your own copy."
+                : "All values are per 100 g of the food (check the label).");
         com.calorietracker.desktop.AppContext.prepareDialog(this);
 
         nameField.setPromptText("e.g. Greek yogurt, full fat");
@@ -53,6 +65,16 @@ public class IngredientEditorDialog extends Dialog<Ingredient> {
         carbsField.setPromptText("required");
         fatField.setPromptText("required");
         fiberField.setPromptText("required");
+
+        if (isEdit) {
+            nameField.setText(editing.name() == null ? "" : editing.name());
+            brandField.setText(editing.brand() == null ? "" : editing.brand());
+            kcalField.setText(String.valueOf(editing.kcalPer100g()));
+            proteinField.setText(stripZero(editing.proteinPer100g()));
+            carbsField.setText(stripZero(editing.carbsPer100g()));
+            fatField.setText(stripZero(editing.fatPer100g()));
+            fiberField.setText(stripZero(editing.fiberPer100g()));
+        }
 
         GridPane form = new GridPane();
         form.setHgap(12);
@@ -93,12 +115,18 @@ public class IngredientEditorDialog extends Dialog<Ingredient> {
                         parseDouble(carbsField.getText()),
                         parseDouble(fatField.getText()),
                         parseDouble(fiberField.getText()));
-                return api.createIngredient(req);
+                return isEdit ? api.updateIngredient(editing.id(), req) : api.createIngredient(req);
             } catch (Exception ex) {
                 Async.showError(ex);
                 return null;
             }
         });
+    }
+
+    /** Render a double cleanly: drop the .0 suffix when it's an integer. */
+    private static String stripZero(double v) {
+        if (v == Math.floor(v) && !Double.isInfinite(v)) return String.valueOf((long) v);
+        return String.valueOf(v);
     }
 
     /** @return the user-friendly error string, or {@code null} when the form is valid. */

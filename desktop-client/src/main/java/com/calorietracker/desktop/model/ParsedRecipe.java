@@ -10,6 +10,8 @@ import java.util.List;
 public record ParsedRecipe(
         String name,
         Integer servings,
-        List<ParsedRecipeIngredient> ingredients
+        List<ParsedRecipeIngredient> ingredients,
+        /** Cooked-weight in grams (optional). 0 / null → server defaults to raw sum. */
+        Double totalCookedGrams
 ) {
 }

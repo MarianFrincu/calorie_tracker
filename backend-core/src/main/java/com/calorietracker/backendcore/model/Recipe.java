@@ -54,6 +54,11 @@ public class Recipe {
     @Column(name = "total_fiber", nullable = false)
     private Double totalFiber = 0.0;
 
+    /** User-entered weight of the cooked dish in grams. Zero means "not set
+     *  — fall back to sum of raw ingredient grams for per-100g math." */
+    @Column(name = "total_cooked_grams", nullable = false)
+    private Double totalCookedGrams = 0.0;
+
     @Column(name = "owner_user_id")
     private Long ownerUserId; // null = public
 

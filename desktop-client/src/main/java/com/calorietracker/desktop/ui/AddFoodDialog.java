@@ -65,11 +65,7 @@ public class AddFoodDialog extends Dialog<AddDiaryRequest> {
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         VBox.setVgrow(tabs, Priority.ALWAYS);
 
-        ComboBox<Meal> mealCombo = new ComboBox<>(FXCollections.observableArrayList(Meal.values()));
-        mealCombo.setValue(preset);
-        HBox mealRow = new HBox(8, new Label("Meal:"), mealCombo);
-
-        VBox content = new VBox(10, tabs, mealRow);
+        VBox content = new VBox(10, tabs);
         content.setPadding(new Insets(12));
         content.setPrefSize(lastWidth, lastHeight);
         content.setMinSize(600, 480);
@@ -115,11 +111,11 @@ public class AddFoodDialog extends Dialog<AddDiaryRequest> {
                 if (tabs.getSelectionModel().getSelectedItem() == foodTab) {
                     IngredientTabState s = (IngredientTabState) foodTab.getUserData();
                     double grams = Double.parseDouble(s.amount.getText().trim());
-                    return AddDiaryRequest.ingredient(date.toString(), mealCombo.getValue(), s.selected.id(), grams);
+                    return AddDiaryRequest.ingredient(date.toString(), preset, s.selected.id(), grams);
                 } else {
                     RecipeTabState s = (RecipeTabState) recipeTab.getUserData();
-                    double servings = Double.parseDouble(s.amount.getText().trim());
-                    return AddDiaryRequest.recipe(date.toString(), mealCombo.getValue(), s.selected.id(), servings);
+                    double grams = Double.parseDouble(s.amount.getText().trim());
+                    return AddDiaryRequest.recipeGrams(date.toString(), preset, s.selected.id(), grams);
                 }
             } catch (NumberFormatException e) {
                 Async.showError(new RuntimeException("Amount must be a number."));
@@ -137,7 +133,7 @@ public class AddFoodDialog extends Dialog<AddDiaryRequest> {
         } else {
             RecipeTabState s = (RecipeTabState) recipeTab.getUserData();
             if (s.selected == null) return "Pick a recipe from the list before clicking OK.";
-            if (s.amount.getText().trim().isEmpty()) return "Enter the number of servings.";
+            if (s.amount.getText().trim().isEmpty()) return "Enter the amount in grams (cooked).";
         }
         return null;
     }
@@ -196,17 +192,15 @@ public class AddFoodDialog extends Dialog<AddDiaryRequest> {
         nameCol.setCellValueFactory(c -> new SimpleStringProperty(
                 c.getValue().name() + (c.getValue().isPublic() ? "" : "  (mine)")));
         nameCol.setPrefWidth(240);
-        TableColumn<Recipe, String> servCol = new TableColumn<>("Servings");
-        servCol.setCellValueFactory(c -> new SimpleStringProperty(String.valueOf(c.getValue().servings())));
-        TableColumn<Recipe, String> kcalCol = new TableColumn<>("Total kcal");
-        kcalCol.setCellValueFactory(c -> new SimpleStringProperty(String.valueOf(c.getValue().totalKcal())));
-        TableColumn<Recipe, String> macroCol = new TableColumn<>("Total P / C / F / Fib");
+        TableColumn<Recipe, String> kcalCol = new TableColumn<>("kcal/100g");
+        kcalCol.setCellValueFactory(c -> new SimpleStringProperty(
+                String.valueOf((int) Math.round(c.getValue().kcalPer100g()))));
+        TableColumn<Recipe, String> macroCol = new TableColumn<>("P / C / F / Fib (per 100g)");
         macroCol.setCellValueFactory(c -> new SimpleStringProperty(String.format("%.1f / %.1f / %.1f / %.1f",
-                c.getValue().totalProtein(), c.getValue().totalCarbs(),
-                c.getValue().totalFat(), c.getValue().totalFiber())));
-        macroCol.setPrefWidth(200);
+                c.getValue().proteinPer100g(), c.getValue().carbsPer100g(),
+                c.getValue().fatPer100g(), c.getValue().fiberPer100g())));
+        macroCol.setPrefWidth(220);
         table.getColumns().add(nameCol);
-        table.getColumns().add(servCol);
         table.getColumns().add(kcalCol);
         table.getColumns().add(macroCol);
         Label empty = new Label("No recipes match. Build one in the Recipes tab, or have the AI tab draft one for you.");
@@ -220,7 +214,7 @@ public class AddFoodDialog extends Dialog<AddDiaryRequest> {
                 table);
         search.setOnAction(e -> pager.resetAndLoad(search.getText()));
 
-        HBox amountRow = new HBox(8, new Label("Servings:"), state.amount);
+        HBox amountRow = new HBox(8, new Label("Amount (g, cooked):"), state.amount);
 
         VBox box = new VBox(8, search, table, pager.loadMoreBar(), amountRow);
         box.setPadding(new Insets(10));

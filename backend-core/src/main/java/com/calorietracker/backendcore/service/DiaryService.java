@@ -66,18 +66,35 @@ public class DiaryService {
             e.setFiber(round1(ing.getFiberPer100g() * factor));
 
         } else if (req.recipeId() != null) {
-            double servings = req.servings() == null ? 1.0 : req.servings();
             Recipe r = recipes.findById(req.recipeId())
                     .orElseThrow(() -> new ResourceNotFoundException("Recipe " + req.recipeId() + " not found"));
             ensureRecipeVisible(r, me);
             e.setRecipeId(r.getId());
             e.setDisplayName(r.getName());
-            e.setAmountText(servings + (servings == 1.0 ? " serving" : " servings"));
-            e.setKcal((int) Math.round(r.getTotalKcal() * servings));
-            e.setProtein(round1(r.getTotalProtein() * servings));
-            e.setCarbs(round1(r.getTotalCarbs() * servings));
-            e.setFat(round1(r.getTotalFat() * servings));
-            e.setFiber(round1(r.getTotalFiber() * servings));
+            // Preferred path: per-100g-cooked × grams of cooked food eaten.
+            // Fall back to the legacy servings flow if the caller didn't send
+            // amountGrams (older clients).
+            if (req.amountGrams() != null && req.amountGrams() > 0) {
+                double grams = req.amountGrams();
+                double cooked = r.getTotalCookedGrams() == null || r.getTotalCookedGrams() <= 0
+                        ? r.getIngredients().stream().mapToDouble(ri -> ri.getAmountGrams()).sum()
+                        : r.getTotalCookedGrams();
+                double factor = cooked > 0 ? grams / cooked : 0;
+                e.setAmountText(round1(grams) + " g");
+                e.setKcal((int) Math.round(r.getTotalKcal() * factor));
+                e.setProtein(round1(r.getTotalProtein() * factor));
+                e.setCarbs(round1(r.getTotalCarbs() * factor));
+                e.setFat(round1(r.getTotalFat() * factor));
+                e.setFiber(round1(r.getTotalFiber() * factor));
+            } else {
+                double servings = req.servings() == null ? 1.0 : req.servings();
+                e.setAmountText(servings + (servings == 1.0 ? " serving" : " servings"));
+                e.setKcal((int) Math.round(r.getTotalKcal() * servings));
+                e.setProtein(round1(r.getTotalProtein() * servings));
+                e.setCarbs(round1(r.getTotalCarbs() * servings));
+                e.setFat(round1(r.getTotalFat() * servings));
+                e.setFiber(round1(r.getTotalFiber() * servings));
+            }
 
         } else if (req.customName() != null && !req.customName().isBlank()) {
             e.setDisplayName(req.customName());

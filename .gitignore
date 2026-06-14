@@ -18,6 +18,7 @@ target/
 *.log
 .env
 .env.*
+.envrc
 
 # Local-only JWT signing key 
 local-private.pem

@@ -12,13 +12,11 @@ import com.calorietracker.desktop.ui.ReportsView;
 import com.calorietracker.desktop.ui.WeightView;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Scene;
-import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
@@ -30,7 +28,6 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -69,8 +66,13 @@ public class CalorieTrackerApp extends Application {
         AppContext.setMainStage(stage);
 
         api = new ApiClient(config.apiBaseUrl());
-        if ("cognito".equalsIgnoreCase(config.authMode()) && !login()) {
-            return;
+        if ("cognito".equalsIgnoreCase(config.authMode())) {
+            String saved = com.calorietracker.desktop.api.SessionStore.loadIfValid();
+            if (saved != null) {
+                api.setToken(saved);
+            } else if (!login()) {
+                return;
+            }
         }
         root = new BorderPane();
         sidebar = buildSidebar();
@@ -218,130 +220,260 @@ public class CalorieTrackerApp extends Application {
      */
     private void signOut() {
         api.setToken(null);
+        com.calorietracker.desktop.api.SessionStore.clear();
         aiView = null;
+        // Hide the main window so only the login dialog is visible.
+        if (stage != null) stage.hide();
         if (login()) {
-            root.setLeft(buildSidebar()); // active-state recolour, etc.
+            // Re-assign the field too, otherwise toggleSidebarCollapsed keeps
+            // mutating the OLD VBox that is no longer on screen.
+            sidebar = buildSidebar();
+            root.setLeft(sidebar);
             showDay();
+            if (stage != null) stage.show();
         } else {
-            stage.close();
+            // User cancelled the sign-in dialog: quit the app entirely.
+            javafx.application.Platform.exit();
         }
     }
 
     // ---------------- Cognito sign-in / sign-up ----------------
 
+    private VBox authFieldGroup(String labelText, javafx.scene.control.Control field) {
+        Label l = new Label(labelText);
+        l.getStyleClass().add("auth-field-label");
+        VBox box = new VBox(6, l, field);
+        box.getStyleClass().add("auth-field-group");
+        return box;
+    }
+
     private boolean login() {
         CognitoAuthService auth = new CognitoAuthService();
-        while (true) {
-            Dialog<ButtonType> dialog = new Dialog<>();
-            dialog.setTitle("Calorie Tracker");
-            dialog.setHeaderText("Sign in or create an account");
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Calorie Tracker");
+        dialog.getDialogPane().setHeader(null);
+        dialog.setHeaderText(null);
+        dialog.setGraphic(null);
 
-            // -- Sign-in tab --
-            TextField siEmail = new TextField(); siEmail.setPromptText("email");
-            PasswordField siPwd = new PasswordField(); siPwd.setPromptText("password");
-            GridPane signInForm = new GridPane();
-            signInForm.setHgap(10);
-            signInForm.setVgap(10);
-            signInForm.setPadding(new Insets(14));
-            signInForm.addRow(0, new Label("Email"), siEmail);
-            signInForm.addRow(1, new Label("Password"), siPwd);
+        Label brand = new Label("Calorie Tracker");
+        brand.getStyleClass().add("auth-brand");
+        Label tagline = new Label("Log meals, track macros, hit your goals.");
+        tagline.getStyleClass().add("auth-tagline");
+        VBox heroBox = new VBox(2, brand, tagline);
+        heroBox.getStyleClass().add("auth-hero");
+        heroBox.setAlignment(Pos.CENTER_LEFT);
 
-            // -- Sign-up tab --
-            TextField suEmail = new TextField(); suEmail.setPromptText("email");
-            PasswordField suPwd = new PasswordField(); suPwd.setPromptText("password (min 8 chars)");
-            PasswordField suPwd2 = new PasswordField(); suPwd2.setPromptText("repeat password");
-            Label suHint = new Label("After registering, Cognito emails a verification code. "
-                    + "Enter the code when prompted, then come back here to sign in.");
-            suHint.setWrapText(true);
-            suHint.getStyleClass().add("muted");
-            GridPane signUpForm = new GridPane();
-            signUpForm.setHgap(10);
-            signUpForm.setVgap(10);
-            signUpForm.setPadding(new Insets(14));
-            signUpForm.addRow(0, new Label("Email"), suEmail);
-            signUpForm.addRow(1, new Label("Password"), suPwd);
-            signUpForm.addRow(2, new Label("Confirm"), suPwd2);
-            VBox signUpBox = new VBox(10, signUpForm, suHint);
-            signUpBox.setPadding(new Insets(0, 14, 14, 14));
+        TextField siEmail = new TextField();
+        siEmail.setPromptText("you@example.com");
+        siEmail.getStyleClass().add("auth-field");
+        PasswordField siPwd = new PasswordField();
+        siPwd.setPromptText("password");
+        siPwd.getStyleClass().add("auth-field");
+        VBox signInBox = new VBox(14,
+                authFieldGroup("Email", siEmail),
+                authFieldGroup("Password", siPwd));
+        signInBox.getStyleClass().add("auth-form");
 
-            TabPane tabs = new TabPane(
-                    new Tab("Sign in", signInForm),
-                    new Tab("Register", signUpBox));
-            tabs.getTabs().forEach(t -> t.setClosable(false));
-            tabs.setPrefWidth(420);
+        TextField suEmail = new TextField();
+        suEmail.setPromptText("you@example.com");
+        suEmail.getStyleClass().add("auth-field");
+        PasswordField suPwd = new PasswordField();
+        suPwd.setPromptText("min 8 chars, 1 uppercase, 1 number");
+        suPwd.getStyleClass().add("auth-field");
+        PasswordField suPwd2 = new PasswordField();
+        suPwd2.setPromptText("repeat the password");
+        suPwd2.getStyleClass().add("auth-field");
+        Label suHint = new Label("We'll email a 6-digit code to confirm your address. "
+                + "Enter it on the next screen, then come back to sign in.");
+        suHint.setWrapText(true);
+        suHint.getStyleClass().add("auth-hint");
+        VBox signUpBox = new VBox(14,
+                authFieldGroup("Email", suEmail),
+                authFieldGroup("Password", suPwd),
+                authFieldGroup("Confirm password", suPwd2),
+                suHint);
+        signUpBox.getStyleClass().add("auth-form");
 
-            ButtonType submit = new ButtonType("Continue", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
-            dialog.getDialogPane().setContent(tabs);
-            dialog.getDialogPane().getButtonTypes().addAll(submit, ButtonType.CANCEL);
-            dialog.getDialogPane().getStylesheets().add(getClass().getResource("/app.css").toExternalForm());
-            AppContext.prepareDialog(dialog);
+        Tab signInTab = new Tab("Sign in", signInBox);
+        Tab registerTab = new Tab("Register", signUpBox);
+        TabPane tabs = new TabPane(signInTab, registerTab);
+        tabs.getStyleClass().add("auth-tabs");
+        tabs.getTabs().forEach(t -> t.setClosable(false));
 
-            Optional<ButtonType> result = dialog.showAndWait();
-            if (result.isEmpty() || result.get() == ButtonType.CANCEL) return false;
+        Label status = new Label("");
+        status.getStyleClass().add("auth-status");
+        status.setWrapText(true);
+        status.setManaged(false);
+        status.setVisible(false);
 
+        VBox content = new VBox(14, heroBox, tabs, status);
+        content.getStyleClass().add("auth-root");
+        content.setPrefWidth(440);
+
+        ButtonType submit = new ButtonType("Continue", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().getButtonTypes().addAll(submit, ButtonType.CANCEL);
+        dialog.getDialogPane().getStyleClass().add("auth-pane");
+        dialog.getDialogPane().getStylesheets().add(getClass().getResource("/app.css").toExternalForm());
+
+        Runnable clearStatus = () -> {
+            status.setText("");
+            status.setManaged(false);
+            status.setVisible(false);
+            status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
+        };
+        java.util.function.BiConsumer<String, Boolean> setStatus = (msg, isError) -> {
+            status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
+            status.getStyleClass().add(isError ? "auth-status-error" : "auth-status-ok");
+            status.setText(msg);
+            status.setManaged(true);
+            status.setVisible(true);
+        };
+
+        tabs.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> clearStatus.run());
+        siEmail.textProperty().addListener((o, a, b) -> clearStatus.run());
+        siPwd.textProperty().addListener((o, a, b) -> clearStatus.run());
+        suEmail.textProperty().addListener((o, a, b) -> clearStatus.run());
+        suPwd.textProperty().addListener((o, a, b) -> clearStatus.run());
+        suPwd2.textProperty().addListener((o, a, b) -> clearStatus.run());
+
+        final boolean[] signedIn = {false};
+
+        Button submitBtn = (Button) dialog.getDialogPane().lookupButton(submit);
+        submitBtn.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
             if (tabs.getSelectionModel().getSelectedIndex() == 1) {
-                handleRegister(auth, suEmail.getText().trim(), suPwd.getText(), suPwd2.getText());
-                continue; // loop back to the sign-in tab so they can log in
-            }
-
-            try {
-                String token = auth.login(config.cognitoRegion(), config.cognitoClientId(),
-                        siEmail.getText().trim(), siPwd.getText());
-                if (token == null || token.isBlank()) {
-                    throw new RuntimeException("No access token returned");
+                ev.consume();
+                String email = suEmail.getText().trim();
+                String pwd = suPwd.getText();
+                String pwd2 = suPwd2.getText();
+                if (email.isBlank() || pwd.isBlank()) {
+                    setStatus.accept("Email and password are required.", true);
+                    return;
                 }
-                api.setToken(token);
-                return true;
-            } catch (Exception e) {
-                showAlert(Alert.AlertType.ERROR,
-                        "Sign-in failed. " + com.calorietracker.desktop.ui.Messages.friendly(e));
+                if (!pwd.equals(pwd2)) {
+                    setStatus.accept("Passwords don't match.", true);
+                    return;
+                }
+                try {
+                    auth.signUp(config.cognitoRegion(), config.cognitoClientId(), email, pwd);
+                } catch (Exception e) {
+                    setStatus.accept("Registration failed. "
+                            + com.calorietracker.desktop.ui.Messages.friendly(e), true);
+                    return;
+                }
+                boolean confirmed = promptVerifyCode(dialog, auth, email);
+                if (confirmed) {
+                    siEmail.setText(email);
+                    siPwd.clear();
+                    tabs.getSelectionModel().select(signInTab);
+                    setStatus.accept("Account confirmed — sign in with your password.", false);
+                    siPwd.requestFocus();
+                }
+            } else {
+                ev.consume();
+                String email = siEmail.getText().trim();
+                String pwd = siPwd.getText();
+                if (email.isBlank() || pwd.isBlank()) {
+                    setStatus.accept("Email and password are required.", true);
+                    return;
+                }
+                try {
+                    String token = auth.login(config.cognitoRegion(), config.cognitoClientId(), email, pwd);
+                    if (token == null || token.isBlank()) {
+                        throw new RuntimeException("No access token returned");
+                    }
+                    api.setToken(token);
+                    com.calorietracker.desktop.api.SessionStore.save(token);
+                    signedIn[0] = true;
+                    dialog.setResult(submit);
+                    dialog.close();
+                } catch (Exception e) {
+                    setStatus.accept("Sign-in failed. "
+                            + com.calorietracker.desktop.ui.Messages.friendly(e), true);
+                }
             }
-        }
+        });
+
+        javafx.application.Platform.runLater(siEmail::requestFocus);
+        AppContext.prepareDialog(dialog);
+        dialog.showAndWait();
+        return signedIn[0];
     }
 
-    private void handleRegister(CognitoAuthService auth, String email, String pwd, String pwd2) {
-        if (email.isBlank() || pwd.isBlank()) {
-            showAlert(Alert.AlertType.WARNING, "Email and password are required.");
-            return;
-        }
-        if (!pwd.equals(pwd2)) {
-            showAlert(Alert.AlertType.WARNING, "Passwords don't match.");
-            return;
-        }
-        try {
-            auth.signUp(config.cognitoRegion(), config.cognitoClientId(), email, pwd);
-        } catch (Exception e) {
-            showAlert(Alert.AlertType.ERROR,
-                    "Registration failed. " + com.calorietracker.desktop.ui.Messages.friendly(e));
-            return;
-        }
+    /**
+     * Modal verify-code dialog owned by the parent login dialog so it
+     * appears on top instead of replacing it. Returns true if Cognito
+     * accepted the code, false otherwise.
+     */
+    private boolean promptVerifyCode(Dialog<?> parent, CognitoAuthService auth, String email) {
         TextInputDialog codeDialog = new TextInputDialog();
-        codeDialog.setTitle("Verify email");
-        codeDialog.setHeaderText("We sent a 6-digit code to " + email + ".");
-        codeDialog.setContentText("Code:");
-        AppContext.prepareDialog(codeDialog);
-        Optional<String> code = codeDialog.showAndWait();
-        if (code.isEmpty() || code.get().isBlank()) {
-            showAlert(Alert.AlertType.INFORMATION,
-                    "Account created. You can confirm it later by registering again with the same email "
-                            + "and entering the code from the email.");
-            return;
-        }
+        codeDialog.setTitle("Verify your email");
+        codeDialog.getDialogPane().setHeader(null);
+        codeDialog.setHeaderText(null);
+        codeDialog.setGraphic(null);
+
+        Label brand = new Label("Check your inbox");
+        brand.getStyleClass().add("auth-brand");
+        Label tagline = new Label("We sent a 6-digit code to " + email + ".");
+        tagline.getStyleClass().add("auth-tagline");
+        VBox hero = new VBox(2, brand, tagline);
+        hero.getStyleClass().add("auth-hero");
+
+        TextField codeField = codeDialog.getEditor();
+        codeField.setPromptText("123456");
+        codeField.getStyleClass().add("auth-field");
+        VBox codeGroup = authFieldGroup("Verification code", codeField);
+
+        Label status = new Label("");
+        status.getStyleClass().add("auth-status");
+        status.setWrapText(true);
+        status.setManaged(false);
+        status.setVisible(false);
+
+        VBox body = new VBox(14, hero, codeGroup, status);
+        body.getStyleClass().add("auth-root");
+        body.setPrefWidth(380);
+
+        codeDialog.getDialogPane().setContent(body);
+        codeDialog.getDialogPane().getStyleClass().add("auth-pane");
+        codeDialog.getDialogPane().getStylesheets().add(getClass().getResource("/app.css").toExternalForm());
+
         try {
-            auth.confirmSignUp(config.cognitoRegion(), config.cognitoClientId(), email, code.get().trim());
-            showAlert(Alert.AlertType.INFORMATION,
-                    "Account verified. You can now sign in.");
-        } catch (Exception e) {
-            showAlert(Alert.AlertType.ERROR,
-                    "Verification failed. " + com.calorietracker.desktop.ui.Messages.friendly(e));
-        }
+            codeDialog.initOwner(parent.getDialogPane().getScene().getWindow());
+            codeDialog.initModality(javafx.stage.Modality.WINDOW_MODAL);
+        } catch (Exception ignored) { /* parent not shown yet — leave defaults */ }
+
+        final boolean[] confirmed = {false};
+        Button okBtn = (Button) codeDialog.getDialogPane().lookupButton(ButtonType.OK);
+        okBtn.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
+            String code = codeField.getText().trim();
+            if (code.isBlank()) {
+                ev.consume();
+                status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
+                status.getStyleClass().add("auth-status-error");
+                status.setText("Enter the code from the email.");
+                status.setManaged(true);
+                status.setVisible(true);
+                return;
+            }
+            try {
+                auth.confirmSignUp(config.cognitoRegion(), config.cognitoClientId(), email, code);
+                confirmed[0] = true;
+            } catch (Exception e) {
+                ev.consume();
+                status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
+                status.getStyleClass().add("auth-status-error");
+                status.setText("Verification failed. "
+                        + com.calorietracker.desktop.ui.Messages.friendly(e));
+                status.setManaged(true);
+                status.setVisible(true);
+            }
+        });
+
+        javafx.application.Platform.runLater(codeField::requestFocus);
+        codeDialog.showAndWait();
+        return confirmed[0];
     }
 
-    /** Owner-aware modal alert with the noisy default header stripped. */
-    private static void showAlert(Alert.AlertType type, String message) {
-        Alert alert = new Alert(type, message);
-        alert.setHeaderText(null);
-        AppContext.prepareDialog(alert);
-        alert.showAndWait();
-    }
+
 }

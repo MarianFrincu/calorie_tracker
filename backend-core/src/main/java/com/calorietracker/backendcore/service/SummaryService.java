@@ -77,17 +77,20 @@ public class SummaryService {
                 .map(w -> new DaySummaryResponse.WaterEntryResponse(w.getId(), w.getMl()))
                 .toList();
 
-        // Resolve the objective in effect on the requested date; fall back to
-        // the user's current cached targets if no snapshot exists yet (typical
-        // for a brand-new user who hasn't saved an objective yet).
+        // Resolve the objective in effect on the requested date. When the date
+        // predates the user's first save (or they've never set one), every target
+        // is zero — the past must not retroactively inherit a goal the user
+        // hadn't set yet. Individual fields may also be null when the user saved
+        // an objective before completing their profile (no BMR/TDEE → no kcal
+        // target); coalesce those to zero too so callers never see null.
         ObjectiveHistory obj = objectives.objectiveOn(me.getId(), date).orElse(null);
-        Integer target        = obj == null ? me.getDailyCalorieTarget()    : obj.getDailyCalorieTarget();
-        Integer waterTarget   = obj == null ? me.getDailyWaterTargetMl()    : obj.getDailyWaterTargetMl();
-        Integer proteinTarget = obj == null ? me.getDailyProteinTargetG()   : obj.getDailyProteinTargetG();
-        Integer carbsTarget   = obj == null ? me.getDailyCarbsTargetG()     : obj.getDailyCarbsTargetG();
-        Integer fatTarget     = obj == null ? me.getDailyFatTargetG()       : obj.getDailyFatTargetG();
-        Integer fiberTarget   = obj == null ? me.getDailyFiberTargetG()     : obj.getDailyFiberTargetG();
-        Integer remaining = target == null ? null : target - totalKcal;
+        int target        = obj == null ? 0 : nz(obj.getDailyCalorieTarget());
+        int waterTarget   = obj == null ? 0 : nz(obj.getDailyWaterTargetMl());
+        int proteinTarget = obj == null ? 0 : nz(obj.getDailyProteinTargetG());
+        int carbsTarget   = obj == null ? 0 : nz(obj.getDailyCarbsTargetG());
+        int fatTarget     = obj == null ? 0 : nz(obj.getDailyFatTargetG());
+        int fiberTarget   = obj == null ? 0 : nz(obj.getDailyFiberTargetG());
+        Integer remaining = target == 0 ? null : target - totalKcal;
 
         return new DaySummaryResponse(
                 date, target, totalKcal, remaining,
@@ -96,6 +99,9 @@ public class SummaryService {
                 out,
                 new WaterSummary(waterTarget, totalMl, waterDtos));
     }
+
+    /** Null-coalesce Integer fields to zero so unboxing never throws NPE. */
+    private static int nz(Integer v) { return v == null ? 0 : v; }
 
     private static double round1(double v) {
         return Math.round(v * 10.0) / 10.0;

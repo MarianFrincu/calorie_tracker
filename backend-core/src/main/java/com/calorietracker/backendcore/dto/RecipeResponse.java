@@ -12,6 +12,8 @@ public record RecipeResponse(
         double totalCarbs,
         double totalFat,
         double totalFiber,
+        /** Weight of the cooked dish in grams. Zero means "use raw weight" — clients should fall back to summing line.amountGrams. */
+        double totalCookedGrams,
         boolean isPublic,
         List<Line> ingredients
 ) {
@@ -22,8 +24,9 @@ public record RecipeResponse(
         List<Line> lines = r.getIngredients().stream()
                 .map(ri -> new Line(ri.getIngredient().getId(), ri.getIngredient().getName(), ri.getAmountGrams()))
                 .toList();
+        double cooked = r.getTotalCookedGrams() == null ? 0.0 : r.getTotalCookedGrams();
         return new RecipeResponse(r.getId(), r.getName(), r.getServings(),
                 r.getTotalKcal(), r.getTotalProtein(), r.getTotalCarbs(), r.getTotalFat(), r.getTotalFiber(),
-                r.getOwnerUserId() == null, lines);
+                cooked, r.getOwnerUserId() == null, lines);
     }
 }
