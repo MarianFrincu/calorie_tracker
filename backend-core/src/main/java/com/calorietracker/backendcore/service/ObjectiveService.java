@@ -20,12 +20,56 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ObjectiveService {
 
+    /** Sentinel date used for the "implicit maintenance" baseline created when a
+     *  user first completes their profile. Far enough in the past to be older
+     *  than any realistic diary entry. The day-summary lookup walks backward to
+     *  the latest snapshot &lt;= the queried date, so any past day picks this up. */
+    private static final LocalDate BASELINE_DATE = LocalDate.of(2000, 1, 1);
+    private static final int DEFAULT_FIBER_TARGET_G = 30;
+    private static final int DEFAULT_WATER_TARGET_ML = 2000;
+
     private final AppUserRepository users;
     private final ObjectiveHistoryRepository history;
 
     public ObjectiveService(AppUserRepository users, ObjectiveHistoryRepository history) {
         this.users = users;
         this.history = history;
+    }
+
+    /**
+     * If the user has a complete profile (so BMR/TDEE is computable) and no
+     * baseline snapshot exists yet, write one at {@link #BASELINE_DATE} with
+     * MAINTAIN goal + 0% + BALANCED preset + TDEE kcal. This is the "implicit
+     * objective" that fills in past days before the user explicitly sets one.
+     * Once written, never re-written — explicit objective changes only affect
+     * today and forward, never the baseline.
+     */
+    @Transactional
+    public void ensureBaselineHistory(AppUser me) {
+        if (me.getSex() == null || me.getAge() == null || me.getHeightCm() == null
+                || me.getWeightKg() == null || me.getActivityLevel() == null) {
+            return;
+        }
+        if (history.findByUserIdAndEffectiveDate(me.getId(), BASELINE_DATE).isPresent()) {
+            return;
+        }
+        Integer kcal = NutritionCalculator.dailyCalorieTarget(me, Goal.MAINTAIN, 0);
+        if (kcal == null) return;
+
+        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(kcal, MacroPreset.BALANCED);
+        ObjectiveHistory baseline = new ObjectiveHistory();
+        baseline.setUserId(me.getId());
+        baseline.setEffectiveDate(BASELINE_DATE);
+        baseline.setGoal(Goal.MAINTAIN);
+        baseline.setGoalPercent(0);
+        baseline.setMacroPreset(MacroPreset.BALANCED);
+        baseline.setDailyCalorieTarget(kcal);
+        baseline.setDailyProteinTargetG(g.protein());
+        baseline.setDailyCarbsTargetG(g.carbs());
+        baseline.setDailyFatTargetG(g.fat());
+        baseline.setDailyFiberTargetG(DEFAULT_FIBER_TARGET_G);
+        baseline.setDailyWaterTargetMl(DEFAULT_WATER_TARGET_ML);
+        history.save(baseline);
     }
 
     @Transactional

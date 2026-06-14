@@ -43,7 +43,11 @@ public class UserProfileService {
         }
         repository.save(u);
         if (bodyChanged) {
-            // New body stats imply new targets; snapshot for today.
+            // First-time profile completion writes the "implicit maintenance"
+            // baseline so past days inherit MAINTAIN + BALANCED + TDEE. Once
+            // written it stays put — explicit objective edits won't touch it.
+            objectives.ensureBaselineHistory(u);
+            // New body stats also imply new targets for today; snapshot now.
             objectives.snapshotToHistory(u, LocalDate.now());
         }
         return u;
