@@ -27,6 +27,13 @@ APP_PARAMS=(
 if [ "${AI_PROVIDER}" = "bedrock" ]; then
   APP_PARAMS+=(BedrockModelId="${BEDROCK_MODEL_ID}")
 fi
+if [ "${AI_PROVIDER}" = "gemini" ]; then
+  if [ -z "${GEMINI_API_KEY}" ]; then
+    fail "AI_PROVIDER=gemini but GEMINI_API_KEY is empty. Add it to .envrc."
+    exit 1
+  fi
+  APP_PARAMS+=(GeminiApiKey="${GEMINI_API_KEY}" GeminiModel="${GEMINI_MODEL}")
+fi
 
 aws cloudformation deploy \
   --stack-name "${STACK_APP}" \

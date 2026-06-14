@@ -30,8 +30,19 @@ export PROJECT="${PROJECT:-calorietracker}"
 # IAM role used by ECS tasks. Created once via deploy-all.sh, reused forever.
 export TASK_ROLE_NAME="${TASK_ROLE_NAME:-CalorieTrackerTaskRole}"
 
-# AI provider: "mock" (offline lookup table) or "bedrock" (real Claude call).
+# AI provider:
+#   mock     — offline lookup table (no AWS, no external API)
+#   bedrock  — AWS Bedrock + Claude (requires model access in the deploy region)
+#   gemini   — Google Gemini API (requires GEMINI_API_KEY, used as Bedrock fallback)
 export AI_PROVIDER="${AI_PROVIDER:-bedrock}"
+
+# Gemini fallback knobs. GEMINI_API_KEY must be set in .envrc (gitignored)
+# if you ever deploy with AI_PROVIDER=gemini. Get one at
+# https://aistudio.google.com/app/apikey.
+export GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.1-flash-lite}"
+# GEMINI_API_KEY is intentionally not defaulted here — it MUST come from
+# .envrc so it never enters git. Empty when AI_PROVIDER != gemini is fine.
+export GEMINI_API_KEY="${GEMINI_API_KEY:-}"
 
 # Bedrock model id. MUST be an inference profile id for Claude 4+ models;
 # Anthropic released them as inference-profile-only on Bedrock. Format depends

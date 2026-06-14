@@ -75,6 +75,15 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: localjwt
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      # Optional AI provider override (defaults to 'mock' so the stack works
+      # offline). Set CALORIETRACKER_AI_PROVIDER + the matching env var in
+      # your shell before running `docker compose up`:
+      #   mock     — no env vars needed
+      #   bedrock  — requires AWS creds + AWS_REGION (Spring AI auto-config)
+      #   gemini   — requires GEMINI_API_KEY (and optionally GEMINI_MODEL)
+      CALORIETRACKER_AI_PROVIDER: ${CALORIETRACKER_AI_PROVIDER:-mock}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
     ports:
       - "8082:8082"
     depends_on:
