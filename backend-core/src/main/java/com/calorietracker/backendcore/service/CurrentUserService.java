@@ -7,7 +7,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Resolves "who is calling" and lazily creates the matching {@link AppUser}.
@@ -16,7 +15,9 @@ import org.springframework.transaction.annotation.Transactional;
  * - dev profile      -> userKey = "dev-user" (single shared local account)
  *
  * Lazy onboarding means the first call from a new user automatically creates
- * the row with default settings - no separate sign-up endpoint needed.
+ * the row with default settings - no separate sign-up endpoint needed. The
+ * insert runs in its own transaction (see {@link UserProvisioner}), so it works
+ * from read-only callers and when a client fires several first requests at once.
  */
 @Service
 public class CurrentUserService {
@@ -24,20 +25,26 @@ public class CurrentUserService {
     public static final String DEV_USER_KEY = "dev-user";
 
     private final AppUserRepository repository;
+    private final UserProvisioner provisioner;
 
-    public CurrentUserService(AppUserRepository repository) {
+    public CurrentUserService(AppUserRepository repository, UserProvisioner provisioner) {
         this.repository = repository;
+        this.provisioner = provisioner;
     }
 
-    @Transactional
+    /** Joins the caller's transaction (if any) so the returned entity is managed there. */
     public AppUser current() {
         String userKey = resolveUserKey();
         return repository.findByUserKey(userKey).orElseGet(() -> {
-            AppUser u = new AppUser();
-            u.setUserKey(userKey);
-            u.setDisplayName(userKey.equals(DEV_USER_KEY) ? "Local Dev" : userKey);
-            return repository.save(u);
+            provisioner.provision(userKey, userKey.equals(DEV_USER_KEY) ? "Local Dev" : userKey);
+            return repository.findByUserKey(userKey)
+                    .orElseThrow(() -> new IllegalStateException("Could not create user " + userKey));
         });
+    }
+
+    /** Stable external id of the caller, without touching the database. */
+    public String currentUserKey() {
+        return resolveUserKey();
     }
 
     private String resolveUserKey() {

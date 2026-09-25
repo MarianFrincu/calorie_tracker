@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.calorietracker.aiservice.dto.ParsedIngredient;
 import com.calorietracker.aiservice.dto.ParsedRecipe;
+import com.calorietracker.aiservice.dto.ParsedRecipeIngredient;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -61,5 +62,22 @@ class MockIngredientParserTest {
         ParsedRecipe r = parser.parseRecipe("");
         assertThat(r.name()).isEqualTo("My recipe");
         assertThat(r.ingredients()).isEmpty();
+    }
+
+    @Test
+    void parse_treats_grams_as_weight_not_count() {
+        // Chicken portion is 100 g / 165 kcal, so 200 g = 330 kcal (not 200 portions).
+        List<ParsedIngredient> items = parser.parse("chicken 200g and rice 150 g");
+        assertThat(items).extracting(ParsedIngredient::name).containsExactly("Chicken", "Rice");
+        assertThat(items.get(0).calories()).isEqualTo(330);
+        assertThat(items.get(0).quantity()).isEqualTo("200 g");
+    }
+
+    @Test
+    void parseRecipe_uses_explicit_grams_as_amount() {
+        ParsedRecipe r = parser.parseRecipe("chicken 200g and rice 150g");
+        assertThat(r.ingredients()).extracting(ParsedRecipeIngredient::amountGrams)
+                .containsExactly(200.0, 150.0);
+        assertThat(r.ingredients().get(0).kcalPer100g()).isEqualTo(165);
     }
 }

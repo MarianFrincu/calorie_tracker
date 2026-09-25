@@ -30,10 +30,12 @@ public class ObjectiveService {
 
     private final AppUserRepository users;
     private final ObjectiveHistoryRepository history;
+    private final ClientClock clock;
 
-    public ObjectiveService(AppUserRepository users, ObjectiveHistoryRepository history) {
+    public ObjectiveService(AppUserRepository users, ObjectiveHistoryRepository history, ClientClock clock) {
         this.users = users;
         this.history = history;
+        this.clock = clock;
     }
 
     /**
@@ -56,7 +58,7 @@ public class ObjectiveService {
         Integer kcal = NutritionCalculator.dailyCalorieTarget(me, Goal.MAINTAIN, 0);
         if (kcal == null) return;
 
-        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(kcal, MacroPreset.BALANCED);
+        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(kcal, MacroPreset.BALANCED, me.getWeightKg());
         ObjectiveHistory baseline = new ObjectiveHistory();
         baseline.setUserId(me.getId());
         baseline.setEffectiveDate(BASELINE_DATE);
@@ -82,7 +84,7 @@ public class ObjectiveService {
 
         recomputeTargets(me);
         users.save(me);
-        snapshotToHistory(me, LocalDate.now());
+        snapshotToHistory(me, clock.today());
         return me;
     }
 
@@ -96,7 +98,7 @@ public class ObjectiveService {
         Integer kcal = NutritionCalculator.dailyCalorieTarget(me, me.getGoal(), me.getGoalPercent());
         me.setDailyCalorieTarget(kcal);
         if (kcal != null) {
-            NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(kcal, me.getMacroPreset());
+            NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(kcal, me.getMacroPreset(), me.getWeightKg());
             me.setDailyProteinTargetG(g.protein());
             me.setDailyCarbsTargetG(g.carbs());
             me.setDailyFatTargetG(g.fat());

@@ -6,9 +6,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 /**
  * Backend-Core service.
  *
- * Owns the Calorie Tracker domain (CRUD over PostgreSQL) and, in a later step,
- * the AI feature (Spring AI + AWS Bedrock). Registers itself with Eureka so the
- * API Gateway can route to it by logical name ({@code lb://backend-core}).
+ * Owns the Calorie Tracker domain (CRUD over PostgreSQL). Registers itself
+ * with Eureka so the API Gateway can route to it by logical name
+ * ({@code lb://backend-core}).
  */
 @SpringBootApplication
 public class BackendCoreApplication {

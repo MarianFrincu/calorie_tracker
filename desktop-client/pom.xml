@@ -12,8 +12,10 @@
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
-        <javafx.version>23.0.1</javafx.version>
-        <jackson.version>2.17.2</jackson.version>
+        <!-- 23.x is the newest JavaFX line that still runs on JDK 21. -->
+        <javafx.version>23.0.2</javafx.version>
+        <jackson.version>2.22.3</jackson.version>
+        <junit.version>6.1.3</junit.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -29,6 +31,13 @@
             <artifactId>jackson-databind</artifactId>
             <version>${jackson.version}</version>
         </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -37,6 +46,48 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.6</version>
+            </plugin>
+
+            <!-- `mvn package` -> target/desktop-client.jar + target/lib/*.jar, the
+                 input scripts/package-desktop.sh hands to jpackage to build a
+                 native installer with a bundled runtime. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.9.0</version>
+                <executions>
+                    <execution>
+                        <id>copy-runtime-deps</id>
+                        <phase>package</phase>
+                        <goals><goal>copy-dependencies</goal></goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <finalName>desktop-client</finalName>
+                    <archive>
+                        <manifest>
+                            <!-- Launcher, not CalorieTrackerApp: a main class that extends
+                                 Application refuses to start from the classpath. -->
+                            <mainClass>com.calorietracker.desktop.Launcher</mainClass>
+                            <addClasspath>true</addClasspath>
+                            <classpathPrefix>lib/</classpathPrefix>
+                        </manifest>
+                    </archive>
+                </configuration>
             </plugin>
             <!-- Run with: mvn -f desktop-client/pom.xml javafx:run -->
             <plugin>

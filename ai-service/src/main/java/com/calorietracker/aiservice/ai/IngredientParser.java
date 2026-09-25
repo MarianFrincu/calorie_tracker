@@ -10,8 +10,9 @@ import java.util.List;
  *   - {@link #parse(String)}       returns flat items intended for diary entries.
  *   - {@link #parseRecipe(String)} returns a recipe blueprint (per-100g macros + grams used).
  * Implementations selected at runtime via {@code calorietracker.ai.provider}:
- *   - {@code mock}    -> {@link MockIngredientParser} (offline default)
- *   - {@code bedrock} -> {@link BedrockIngredientParser} (Spring AI + AWS Bedrock)
+ *   - {@code library} -> {@link LibraryIngredientParser} (food-library search; default, free)
+ *   - {@code gemini}  -> {@link GeminiIngredientParser} (Google Gemini API)
+ *   - {@code mock}    -> {@link MockIngredientParser} (built-in table; tests)
  */
 public interface IngredientParser {
     List<ParsedIngredient> parse(String text);

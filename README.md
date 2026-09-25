@@ -1,127 +1,205 @@
 # Calorie Tracker
 
-A microservices calorie-tracking application: **JavaFX desktop client →
-Spring Cloud Gateway → (ai-service · backend-core) → PostgreSQL**, with
-Eureka discovery, AWS Cognito security, an AWS Bedrock AI feature,
-Docker/Compose for local dev, and CloudFormation for AWS deployment.
+Log meals, water and weight, set a goal, and see daily and weekly progress.
+It comes with a web app (the main client) and a JavaFX desktop app with the
+same features. Both talk to Spring Boot microservices that run locally with
+Docker Compose or on AWS.
 
-The desktop client is a real product: per-day diary with 4 meals + water,
-custom ingredients + recipes, AI-assisted parsing with library
-cross-checking, calorie/macro objectives with historical snapshots, weight
-tracking with smooth-curve charts, weekly/monthly reports, food comparison,
-advanced rule-based food search, and a Cognito sign-in/register flow for
-cloud mode.
+![Day view](docs/screenshots/day.png)
+
+| AI meal parser | Reports | Phone |
+|---|---|---|
+| ![AI](docs/screenshots/ai.png) | ![Reports](docs/screenshots/reports.png) | ![Phone](docs/screenshots/phone-day.png) |
+
+## Features
+
+- **Diary:** four meals per day. Entries can be moved, copied or deleted,
+  with calories, protein, carbs, fat and fiber totals against your targets.
+  Water is tracked separately.
+- **Foods and recipes:** about 160 built-in foods plus your own. Search
+  tolerates typos. Recipes record the cooked weight, so portions are weighed
+  after cooking.
+- **AI parser:** type "2 eggs and a banana" and get the foods with their
+  macros, ready to add to the diary or save as a recipe. It uses the built-in
+  food library by default, or Google Gemini if you give it a key.
+- **Goals:** targets come from your BMR and TDEE (Mifflin-St Jeor) and a
+  lose/maintain/gain goal. Macros come from a preset. See
+  [Nutrition rules](#nutrition-rules).
+- **Weight log, reports and explore:** weekly and monthly charts with your
+  past targets, food comparisons, and search by nutrition rules.
+- **Accounts:** sign-up with email confirmation, password reset and account
+  deletion. Sign-in uses SRP, so the password never leaves the device.
+
+## How it works
+
+```
+ browser ─┐  HTTPS   CloudFront ──▶ private load balancer ─┬─ /api/* ─▶ api-gateway ─┬─▶ backend-core ─▶ PostgreSQL
+ desktop ─┘                                                │                        └─▶ ai-service ──▶ Gemini (optional)
+                                                           └─ else ──▶ web-client (nginx)
+            sign-in: Cognito        service discovery: 2 Eureka servers
+```
+
+| Service | Does |
+|---|---|
+| `api-gateway` | Single entry for `/api`. Checks every token, routes to the services, adds security headers. |
+| `backend-core` | All data: profile, goals, diary, foods, recipes, water, weight, reports, the AI quota. |
+| `ai-service` | Turns meal text into nutrition (food-library search or Gemini). No database. |
+| `eureka-server` | Service registry. Two replicating servers on AWS, one locally. |
+| `web-client` | React app served by nginx. |
+| `desktop-client` | JavaFX app using the same API. |
+
+**Tech:** Java 21, Spring Boot 4, Spring Cloud 2025.1, PostgreSQL 16, Flyway,
+React 19 + TypeScript + Vite, JavaFX 23, Docker, AWS (CloudFormation, ECS
+Fargate, RDS, Cognito, CloudFront).
+
+## Run it locally
+
+Only Docker is needed. The desktop client also needs JDK 21+ and Maven.
+
+```bash
+make up        # builds and starts everything (~3 min the first time)
+```
+
+Open **http://localhost:8088**. Locally there's no sign-in: everything
+belongs to one local user, and the data stays in a Docker volume.
+
+| Command | |
+|---|---|
+| `make down` | stop (keeps the data) |
+| `make logs` / `make ps` | follow logs / container health |
+| `make desktop` | desktop client against the local app |
+| `make test` | all 199 unit and integration tests, in Docker |
+| `make e2e` | browser tests (12) against the running app |
+
+Every port is bound to `127.0.0.1`. For hot reload on the web app (Node 20+):
+`cd web-client && npm install && npm run dev`, then open http://localhost:5173.
+
+### Settings
+
+Copy [.envrc.example](.envrc.example) to `.envrc` (gitignored) and set only
+what you need. Most users need just `GEMINI_API_KEY` for AI with Gemini, and
+`AWS_DEFAULT_REGION` for the cloud. The example lists every setting with its
+default. Anything you leave out uses that default.
+
+## Deploy to AWS
+
+You need the AWS CLI (`aws configure`) and Docker.
+
+```bash
+make deploy       # ~45 min the first time; prints https://<id>.cloudfront.net
+make smoke        # 30 checks against the live app, ~1 min
+make destroy      # deletes everything; charges stop
+```
+
+`make deploy` creates five CloudFormation stacks:
+
+| Stack | Contents |
+|---|---|
+| network | VPC, subnets, Cloud Map, image registries |
+| database | encrypted RDS PostgreSQL |
+| Cognito | user pool |
+| app | ECS Fargate services with auto scaling, private load balancer, CloudFront with HTTPS on a free `*.cloudfront.net` address |
+| CI/CD (optional) | the pipeline from GitHub |
+
+It is safe to re-run. Other commands:
+
+| Command | |
+|---|---|
+| `make deploy-app` | apply a changed setting or `04-app.yaml` |
+| `make deploy-images SERVICES="backend-core"` | ship code without CI (all images if `SERVICES` is omitted) |
+| `make desktop-cloud` | desktop client against the deployment |
+| `make cloud-status` | which stacks exist, i.e. what is costing money |
+
+A custom domain is optional: set `DOMAIN_NAME` and `CLOUDFRONT_CERT_ARN` (an
+ACM certificate in `us-east-1`).
+
+### Cost
+
+About **$0.20/hour** in eu-central-1, billed hourly with nothing monthly.
+
+| Item | Per hour |
+|---|---|
+| 6 Fargate tasks + their public IPs | $0.12 |
+| Load balancer | $0.035 |
+| PostgreSQL `db.t4g.micro` | $0.023 |
+| Logs, secrets, alarms, images | ~$0.02 |
+
+CloudFront, Cognito (under 10k users) and the library AI are free.
+
+- **Auto scaling:** adds about $0.02/h per extra task, only under load.
+- **WAF (optional):** +$0.011/h.
+- **Each CI run:** about $0.35.
+- **A 5-hour test:** deploy, test and destroy costs about $1.20.
+- **Leaving it running:** about $4.80/day. `BUDGET_EMAIL` sends a free cost
+  alert.
+
+### CI/CD (optional)
+
+Every push to `main` runs the full test suite and the browser tests, pushes
+the images, rolls the services and runs the smoke test. Nothing deploys if a
+test fails, and documentation-only commits are skipped. Steps:
+[infra/buildspec.yml](infra/buildspec.yml).
+
+To enable it:
+1. Create a GitHub connection in the AWS console: *Developer Tools* →
+   *Settings* → *Connections*.
+2. Set `GH_CONN_ARN` and `GH_REPO` in `.envrc`.
+3. Commit and push.
+4. Run `make deploy`. It won't create the pipeline while local changes are
+   unpushed, because the pipeline's first run deploys what's on GitHub.
+
+## Nutrition rules
+
+- **Calorie target:** TDEE adjusted by the goal percentage, but **never below
+  your BMR**. Cuts that would go below it can't be picked.
+- **Protein cap:** protein is capped at **2.2 g per kg** of body weight. The
+  calories above the cap go to carbs and fat, so the total stays the same.
+- **Where the rules live:** backend-core's `NutritionCalculator`. The web and
+  desktop previews use copies of it, and the same test numbers check all three.
+
+## Security
+
+- **Transport:** HTTPS only (CloudFront). Browsers below TLS 1.2 are refused.
+  The load balancer and database are in private subnets, and the database
+  connection uses verified TLS.
+- **Tokens:** the gateway and each service check every token: signature,
+  expiry, issuer, access token only, and this app's client only.
+- **Data isolation:** every query is limited to the signed-in user.
+- **Browser:** one origin, so there is no CORS. Strict CSP and security
+  headers.
+- **Sessions:** 1-hour access tokens with silent refresh. Sign-out revokes the
+  refresh token. The web app keeps the refresh token in memory; the desktop
+  app stores its session in an owner-only file.
+- **Limits:** per-user AI quota (10/min, 200/day, counted in the database),
+  request size limits, optional WAF.
+- **Containers:** non-root, no AWS permissions. Secrets live in AWS Secrets
+  Manager.
+
+Known limits: no MFA (by choice). The AI quota uses fixed windows, so a short
+burst across a minute boundary can reach twice the per-minute limit.
+
+## Tests
+
+| Suite | Count |
+|---|---|
+| backend-core (over HTTP, real PostgreSQL via Testcontainers) | 62 |
+| ai-service | 51 |
+| desktop-client | 29 |
+| api-gateway | 11 |
+| web-client (Vitest) | 46 |
+| Browser journeys (Playwright, desktop + phone) | 12 |
+| Live smoke test after deploying | 30 checks |
+
+The SRP sign-in code in both clients is checked against values from AWS's own
+`amazon-cognito-identity-js`.
 
 ## Repository layout
 
-| Path | What |
+| Path | |
 |---|---|
-| [eureka-server/](eureka-server/) | Service registry (port 8761) |
-| [api-gateway/](api-gateway/) | Spring Cloud Gateway (port 8080) — single public entry, JWT at the edge |
-| [backend-core/](backend-core/) | CRUD + business logic (port 8081) → PostgreSQL |
-| [ai-service/](ai-service/) | Stateless AI parser (port 8082) → optional AWS Bedrock |
-| [desktop-client/](desktop-client/) | JavaFX client (REST only, never touches the DB) |
-| [docker-compose.yml](docker-compose.yml) + [override](docker-compose.override.yml) | Local orchestration |
-| [infra/cloudformation/](infra/cloudformation/) | 5 CloudFormation stacks (foundation, database, cognito, app, ci/cd) |
-| [infra/buildspec.yml](infra/buildspec.yml) | Reference CodeBuild buildspec (mirrored inline in `05-cicd.yaml`) |
-
-## Tech
-
-Java 21 · Spring Boot 3.4.1 · Spring Cloud 2024.0.0 · Spring AI 1.0.0 (Bedrock
-Converse) · PostgreSQL 16 · Flyway · JavaFX 23.0.1 · Docker / Compose · AWS
-(ECS Fargate, RDS, Cognito, ALB, Secrets Manager, ECR, CloudFormation,
-CodePipeline + CodeBuild for CI/CD).
-
-> Builds run inside Docker (Maven JDK 21 → JRE 21), so your host JDK version
-> doesn't matter for the backend. For the desktop client itself, you need
-> JDK 21 (anything newer breaks JavaFX 23 on Linux at the moment).
-
-## Run locally (60 seconds from clone)
-
-```bash
-docker compose up --build -d
-```
-
-That starts five containers — postgres, eureka-server, ai-service,
-backend-core, api-gateway — wired up via healthchecks so the boot order is
-correct.
-
-- Eureka dashboard: <http://localhost:8761>
-- Gateway: <http://localhost:8080> (e.g. `curl http://localhost:8080/api/profile`)
-
-Run the desktop client in a separate terminal:
-
-```bash
-mvn -f desktop-client/pom.xml javafx:run
-```
-
-In the default override mode, the backend runs under the `dev` Spring profile
-(security off) so the client doesn't need a login. The first call lazily
-creates a single shared user `dev-user`, and all your data persists in
-Postgres until you `docker compose down -v`.
-
-## Three security modes
-
-The same code runs under three profiles. The only difference is how the
-gateway/backend-core/ai-service validate JWTs.
-
-| Profile | Behavior | When to use |
-|---|---|---|
-| `dev` | auth OFF | local desktop development (compose default via override) |
-| `localjwt` | validate JWT vs baked-in RSA key | test the security layer offline — `docker compose -f docker-compose.yml up` |
-| `cognito` | validate JWT vs AWS Cognito (issuer-uri) | cloud (set `COGNITO_ISSUER_URI`) |
-
-Roles come from the Cognito `cognito:groups` claim (`USER` / `ADMIN`);
-machine-to-machine tokens authorize via OAuth2 scopes
-(`foods.read` → ROLE_USER, `foods.write` → ROLE_ADMIN).
-
-## Features at a glance
-
-- **Day view**: per-day diary across Breakfast / Lunch / Dinner / Snack, with
-  per-meal kcal + macros + the right-side TODAY card (kcal target + 4 macro
-  bars), water tracking with one-tap +/- chips.
-- **Move / Copy** any diary row to another meal or another date via the `⋯`
-  menu — historical days never re-mutate.
-- **Foods & Recipes**: search your library (or the public seed set); fuzzy
-  fallback so "zucini" still finds "Zucchini"; build recipes with a live
-  macros total + `kcal ≈ 4·P + 4·C + 9·F ± 10` consistency check.
-- **AI tab**: free-text → structured nutrition. *"2 eggs and toast with
-  butter"* → individual rows with calories + macros + **Add all to diary**;
-  or *"chicken 200g and rice 150g"* → an editable recipe blueprint you can
-  save with one click. Each parsed item is cross-checked against the
-  database and shows a coloured badge: *"in app library"* (blue), *"in my
-  library"* (green), or *"not in any library — AI estimate"* (amber) with
-  a one-click **Save to my library** button.
-- **Explore tab**:
-  - **Compare** — pick 2-4 foods/recipes side-by-side, table + grouped bar
-    chart per macro/calories.
-  - **Advanced search** — rule-based food filter; rules combine via AND/OR
-    groups that nest up to 4 deep.
-- **Profile**: body stats + live preview of BMR (Mifflin-St Jeor) and TDEE
-  (BMR × activity multiplier). The weight field is linked to the Weight tab
-  in both directions.
-- **Objective**: read-only summary + modal editor (±10/15/20/25/30%
-  intensity, three macro presets BALANCED / MAINTAIN_MUSCLE / KETOGENIC).
-  Saving snapshots today's objective so yesterday stays unchanged.
-- **Weight**: 1-decimal precision, table + smooth monotone-cubic chart over
-  time; saving today's weight also patches `profile.weightKg`.
-- **Reports**: monotone-cubic AreaChart per metric (calories, protein, carbs,
-  fat, fiber, water) for the current calendar week or month. Day-specific
-  historical targets are drawn as a dashed red curve that flexes to match
-  the value in effect on each day.
-- **Login / Register / Logout**: TabPane in cloud mode — Sign-in
-  (USER_PASSWORD_AUTH), Register (SignUp + ConfirmSignUp via email code),
-  and a Sign-out button.
-
-## AI feature
-
-`POST /api/ai/parse` and `POST /api/ai/parse-recipe` (served by
-**ai-service**) turn free-text into structured macros. Provider is
-swappable via the `CALORIETRACKER_AI_PROVIDER` env var:
-
-- `mock` (default, offline, deterministic — for local + CI)
-- `bedrock` (Spring AI + AWS Bedrock Converse, `bedrock` profile)
-
-Persisting an AI-built recipe goes through **backend-core**
-(`POST /api/recipes/from-ai`) because only that service owns the DB —
-ai-service is intentionally stateless.
+| `api-gateway/`, `backend-core/`, `ai-service/`, `eureka-server/` | Spring Boot services |
+| `web-client/` | React app ([README](web-client/README.md)) |
+| `desktop-client/` | JavaFX app (`make package-desktop` builds a native app) |
+| `infra/cloudformation/` | 01 network · 02 database · 03 Cognito · 04 app · 05 CI/CD |
+| `scripts/` | `deploy.sh`, `destroy.sh`, `smoke-test.sh`, `test-all.sh`, `package-desktop.sh` (settings in `vars.sh`) |
+| `docker-compose.yml`, `Makefile` | local stack, commands |

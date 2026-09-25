@@ -7,13 +7,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Normalizes AI parser output so downstream code (and the user) never has to
- * deal with missing macros. Two guarantees per item:
- *   - fiber is never null/negative — defaults to 0 (animal/fat products).
- *   - protein/carbs/fat sum (via the 4/4/9 kcal equation) matches the stated
- *     kcal. Missing macros are filled in using a balanced 40/40/20 split of
- *     the unaccounted-for kcal so the totals you see add up.
- * Pure utility, no Spring beans, no state — safe to call on any parser output.
+ * Completes parser output: fiber defaults to 0, and macros the model left out
+ * are filled from the unexplained calories (4P + 4C + 9F, split 40/40/20).
+ * A zero counts as missing only when the other macros can't explain the
+ * calories - chicken breast really has 0 g carbs.
  */
 public final class NutritionFiller {
 
@@ -46,10 +43,14 @@ public final class NutritionFiller {
         return new ParsedRecipe(r.name(), r.servings(), out);
     }
 
+    /** Known macros explaining at least this share of kcal means the zeros are real. */
+    private static final double EXPLAINED_SHARE = 0.85;
+
     /**
      * Returns {protein, carbs, fat} (grams) such that 4P + 4C + 9F ≈ kcal.
-     * Macros already provided (>0) are kept; missing macros split the leftover
-     * kcal using a typical 40/40/20 P/C/F mix. If everything is given and the
+     * Macros already provided (>0) are kept. Zeros are filled from the leftover
+     * kcal (40/40/20 P/C/F mix) only when the provided macros explain less than
+     * {@value #EXPLAINED_SHARE} of the calories. If everything is given and the
      * sum doesn't match kcal, we trust the AI and leave it alone — clamping
      * would punish a 5% rounding error.
      */
@@ -64,6 +65,9 @@ public final class NutritionFiller {
             return new double[]{p, c, f};
         }
         double kcalKnown = (pMissing ? 0 : 4 * p) + (cMissing ? 0 : 4 * c) + (fMissing ? 0 : 9 * f);
+        if (kcalKnown >= EXPLAINED_SHARE * kcal) {
+            return new double[]{Math.max(0, p), Math.max(0, c), Math.max(0, f)};
+        }
         double remaining = Math.max(0, kcal - kcalKnown);
 
         // Weights describing how to split `remaining` across the missing macros.

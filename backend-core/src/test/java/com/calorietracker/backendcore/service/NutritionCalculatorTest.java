@@ -48,7 +48,7 @@ class NutritionCalculatorTest {
     @Test
     void macro_grams_balanced_preset_sums_to_calorie_target_within_rounding() {
         // BALANCED preset: 30% P, 50% C, 20% F.  protein/carbs at 4 kcal/g, fat at 9 kcal/g.
-        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(2000, MacroPreset.BALANCED);
+        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(2000, MacroPreset.BALANCED, null);
         double kcal = g.protein() * 4 + g.carbs() * 4 + g.fat() * 9;
         // Rounding loses a few kcal at worst; within 5 kcal is fine.
         assertThat(kcal).isCloseTo(2000.0, within(5.0));
@@ -56,7 +56,7 @@ class NutritionCalculatorTest {
 
     @Test
     void macro_grams_ketogenic_is_fat_dominant() {
-        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(2000, MacroPreset.KETOGENIC);
+        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(2000, MacroPreset.KETOGENIC, null);
         // Ketogenic = ~70% fat; in grams that's ~155 g (2000 * 0.7 / 9).
         assertThat(g.fat()).isGreaterThan(g.protein());
         assertThat(g.fat()).isGreaterThan(g.carbs());
@@ -86,5 +86,49 @@ class NutritionCalculatorTest {
         Integer clamped = NutritionCalculator.dailyCalorieTarget(u, Goal.LOSE, 999);
         Integer at50 = NutritionCalculator.dailyCalorieTarget(u, Goal.LOSE, 50);
         assertThat(clamped).isEqualTo(at50);
+    }
+
+    private static com.calorietracker.backendcore.model.AppUser male25y180cm80kg(ActivityLevel activity) {
+        com.calorietracker.backendcore.model.AppUser u = new com.calorietracker.backendcore.model.AppUser();
+        u.setSex(Sex.MALE);
+        u.setAge(25);
+        u.setHeightCm(180.0);
+        u.setWeightKg(80.0);
+        u.setActivityLevel(activity);
+        return u;
+    }
+
+    @Test
+    void a_losing_target_never_goes_below_bmr() {
+        // BMR 1805. Sedentary TDEE 2166; LOSE 30% would be 1516 - raised to 1805.
+        assertThat(NutritionCalculator.dailyCalorieTarget(male25y180cm80kg(ActivityLevel.SEDENTARY), Goal.LOSE, 30))
+                .isEqualTo(1805);
+        // Moderate TDEE 2798; LOSE 20% = 2238 is above BMR, untouched.
+        assertThat(NutritionCalculator.dailyCalorieTarget(male25y180cm80kg(ActivityLevel.MODERATE), Goal.LOSE, 20))
+                .isEqualTo(2238);
+    }
+
+    @Test
+    void protein_is_capped_at_2_2_g_per_kg_and_the_rest_moves_to_carbs_and_fat() {
+        // 60 kg -> at most 132 g. MAINTAIN_MUSCLE at 3000 kcal would be 262 g.
+        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(3000, MacroPreset.MAINTAIN_MUSCLE, 60.0);
+        assertThat(g.protein()).isEqualTo(132);
+        assertThat(g.carbs()).isEqualTo(380);
+        assertThat(g.fat()).isEqualTo(106);
+        assertThat(g.protein() * 4 + g.carbs() * 4 + g.fat() * 9).isCloseTo(3000, within(5));
+    }
+
+    @Test
+    void capped_keto_protein_moves_mostly_to_fat() {
+        NutritionCalculator.MacroGrams g = NutritionCalculator.macroGrams(3000, MacroPreset.KETOGENIC, 60.0);
+        assertThat(g.protein()).isEqualTo(132);
+        assertThat(g.carbs()).isEqualTo(41);
+        assertThat(g.fat()).isEqualTo(256);
+    }
+
+    @Test
+    void protein_under_the_cap_is_untouched() {
+        assertThat(NutritionCalculator.macroGrams(2000, MacroPreset.BALANCED, 80.0))
+                .isEqualTo(NutritionCalculator.macroGrams(2000, MacroPreset.BALANCED, null));
     }
 }

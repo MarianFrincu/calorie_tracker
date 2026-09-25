@@ -1,8 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Calorie Tracker - CI/CD: a GitHub-sourced CodePipeline that runs a CodeBuild
-  project to build the four Docker images, push them to ECR, and force a new
-  deployment of every ECS service.
+  Calorie Tracker - CI/CD: a GitHub-sourced CodePipeline whose CodeBuild project
+  (steps in infra/buildspec.yml) runs every test suite and the browser tests,
+  pushes the five Docker images to ECR, rolls the ECS services and smoke-tests
+  the live app.
 
   Source: AWS CodeStar Connections (CodeConnections) to a private GitHub
   repository. Create the connection ONCE via the AWS console
@@ -41,8 +42,7 @@ Parameters:
 
 Resources:
 
-  # Artifact store used between Source -> Build stages. Short retention since
-  # nothing downstream of the pipeline reads it.
+  # Hand-off between pipeline stages; nothing reads it later.
   ArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -83,13 +83,29 @@ Resources:
               - Effect: Allow
                 Action: [ecs:UpdateService, ecs:DescribeServices]
                 Resource: '*'
+              # Stack outputs: Cognito ids for the web build, URL for the smoke test.
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource:
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-cognito/*'
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-app/*'
+              # Smoke test: a throwaway user in this project's pool only.
+              - Effect: Allow
+                Action: [cognito-idp:AdminCreateUser, cognito-idp:AdminSetUserPassword, cognito-idp:AdminInitiateAuth, cognito-idp:AdminDeleteUser]
+                Resource: !Sub
+                  - 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${PoolId}'
+                  - PoolId:
+                      Fn::ImportValue: !Sub '${ProjectName}-UserPoolId'
+              # Smoke test: confirms the load balancer is private.
+              - Effect: Allow
+                Action: elasticloadbalancing:DescribeLoadBalancers
+                Resource: '*'
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:GetBucketVersioning]
                 Resource:
                   - !GetAtt ArtifactBucket.Arn
                   - !Sub '${ArtifactBucket.Arn}/*'
-              # CodeBuild pulls the full git ref (CODEBUILD_CLONE_REF mode) so
-              # the buildspec can `git diff` to skip phases when nothing relevant changed.
+              # Full git clone, so the buildspec can skip docs-only commits.
               - Effect: Allow
                 Action: codestar-connections:UseConnection
                 Resource: !Ref GitHubConnectionArn
@@ -119,11 +135,9 @@ Resources:
               - Effect: Allow
                 Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
                 Resource: '*'
-              # Required so CodePipeline can pull from the GitHub connection
               - Effect: Allow
                 Action: codestar-connections:UseConnection
                 Resource: !Ref GitHubConnectionArn
-              # Required so CodePipeline can pass git-clone metadata to CodeBuild
               - Effect: Allow
                 Action: codeconnections:UseConnection
                 Resource: !Ref GitHubConnectionArn
@@ -135,92 +149,36 @@ Resources:
       Name: !Sub '${ProjectName}-build'
       ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts: { Type: CODEPIPELINE }
+      TimeoutInMinutes: 60
+      # Reuse Docker layers and Maven downloads between builds.
+      Cache:
+        Type: LOCAL
+        Modes: [LOCAL_DOCKER_LAYER_CACHE, LOCAL_CUSTOM_CACHE]
       Environment:
         Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
+        # 4 vCPU / 7 GB for the whole app + a browser; ~USD 0.01/minute while running.
+        ComputeType: BUILD_GENERAL1_MEDIUM
         Image: aws/codebuild/standard:7.0
-        PrivilegedMode: true   # needed for 'docker build'
+        PrivilegedMode: true   # needed for docker build / docker compose / Testcontainers
         EnvironmentVariables:
           - { Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region }
           - { Name: ACCOUNT_ID, Value: !Ref AWS::AccountId }
           - { Name: PROJECT, Value: !Ref ProjectName }
           - { Name: ECR, Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com' }
+          # Ryuk comes from Docker Hub (rate limits); the machine is thrown away anyway.
+          - { Name: TESTCONTAINERS_RYUK_DISABLED, Value: 'true' }
       Source:
         Type: CODEPIPELINE
-        # Source action delivers a CODEBUILD_CLONE_REF artifact => CodeBuild does
-        # the actual git clone with full history, which lets us diff this commit
-        # against the previous one and skip rebuilds when nothing changed.
-        BuildSpec: |
-          version: 0.2
-          phases:
-            install:
-              runtime-versions:
-                java: corretto21
-            pre_build:
-              commands:
-                - |
-                  echo "Detecting which backend services changed..."
-                  if git rev-parse HEAD~1 >/dev/null 2>&1; then
-                    CHANGED=$(git diff --name-only HEAD~1 HEAD)
-                  else
-                    CHANGED="eureka-server/ api-gateway/ backend-core/ ai-service/"
-                  fi
-                  echo "Changed files:"
-                  echo "$CHANGED"
-                  > /tmp/services_to_build
-                  for svc in eureka-server api-gateway backend-core ai-service; do
-                    if echo "$CHANGED" | grep -qE "^${svc}/"; then
-                      echo "$svc" >> /tmp/services_to_build
-                    fi
-                  done
-                  if echo "$CHANGED" | grep -qE "^(infra/buildspec|infra/cloudformation/05-cicd)"; then
-                    printf 'eureka-server\napi-gateway\nbackend-core\nai-service\n' > /tmp/services_to_build
-                  fi
-                  if [ ! -s /tmp/services_to_build ]; then
-                    echo "==> No backend source changed (likely docs / infra only). Skipping build."
-                    touch /tmp/skip_build
-                  else
-                    echo "==> Will rebuild:"; cat /tmp/services_to_build
-                  fi
-                - |
-                  if [ -f /tmp/skip_build ]; then exit 0; fi
-                  echo "Running mvn test on services to rebuild..."
-                  for svc in $(cat /tmp/services_to_build); do
-                    echo "── Testing ${svc} ──"
-                    (cd $svc && mvn -B -q test)
-                  done
-                - |
-                  if [ -f /tmp/skip_build ]; then exit 0; fi
-                  aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
-            build:
-              commands:
-                - |
-                  if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
-                  for svc in $(cat /tmp/services_to_build); do
-                    echo "── Building ${svc} ──"
-                    docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc
-                    docker push $ECR/$PROJECT-$svc:latest
-                  done
-            post_build:
-              commands:
-                - |
-                  if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
-                  for svc in $(cat /tmp/services_to_build); do
-                    case "$svc" in
-                      eureka-server) ecs_svc="$PROJECT-eureka" ;;
-                      api-gateway)   ecs_svc="$PROJECT-gateway" ;;
-                      backend-core)  ecs_svc="$PROJECT-core" ;;
-                      ai-service)    ecs_svc="$PROJECT-ai" ;;
-                    esac
-                    echo "── Redeploying ${ecs_svc} ──"
-                    aws ecs update-service --cluster $PROJECT-cluster --service "$ecs_svc" --force-new-deployment
-                  done
+        # The steps live in the repo, versioned with the code they build.
+        BuildSpec: infra/buildspec.yml
 
   # ---------------- CodePipeline ----------------
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
       Name: !Sub '${ProjectName}-pipeline'
+      # V2: billed per action-minute, no monthly fee (V1 costs USD 1/month).
+      PipelineType: V2
       RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
         Type: S3
@@ -229,10 +187,7 @@ Resources:
         - Name: Source
           Actions:
             - Name: GitHubSource
-              # CodeStar Connections (a.k.a. CodeConnections) provider talks to
-              # GitHub via the OAuth app installed once at connection creation.
-              # DetectChanges=true means GitHub will push CloudWatch events to
-              # CodePipeline on every commit to GitHubBranch -> instant trigger.
+              # Every push to GitHubBranch starts a run.
               ActionTypeId:
                 Category: Source
                 Owner: AWS
@@ -243,8 +198,7 @@ Resources:
                 FullRepositoryId: !Ref GitHubFullRepo
                 BranchName: !Ref GitHubBranch
                 DetectChanges: 'true'
-                # FULL_CLONE pulls .git history so the buildspec can run
-                # `git diff HEAD~1 HEAD` to skip rebuilds when nothing changed.
+                # Git history, for the docs-only check.
                 OutputArtifactFormat: CODEBUILD_CLONE_REF
               OutputArtifacts: [{ Name: SourceOutput }]
         - Name: BuildAndDeploy

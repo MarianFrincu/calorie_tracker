@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
@@ -20,8 +21,8 @@ public record CreateRecipeRequest(
         @PositiveOrZero @Max(100_000) Double totalCookedGrams
 ) {
     public record Line(
-            @Positive Long ingredientId,
-            @Positive @Max(100_000) Double amountGrams
+            @NotNull @Positive Long ingredientId,
+            @NotNull @Positive @Max(100_000) Double amountGrams
     ) {
     }
 }

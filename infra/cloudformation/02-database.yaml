@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Calorie Tracker - Database: PostgreSQL on RDS (cheapest viable) plus a
-  Secrets Manager secret holding the credentials. Imports networking from the
-  foundation stack. (AWS Academy Learner Lab friendly.)
+  Calorie Tracker - Database: PostgreSQL on RDS (cheapest viable, encrypted,
+  backed up, deletion-protected) plus a Secrets Manager secret holding the
+  credentials. Imports networking from the foundation stack.
 
 Parameters:
   ProjectName:
@@ -10,7 +10,7 @@ Parameters:
     Default: calorietracker
   DBEngineVersion:
     Type: String
-    Default: '16.9'
+    Default: '16.15'
     Description: >
       PostgreSQL version. AWS rotates which patch versions are valid; if this
       one is rejected, find a current one with:
@@ -20,8 +20,18 @@ Parameters:
       then deploy with --parameter-overrides DBEngineVersion=<value>.
   DBInstanceClass:
     Type: String
-    Default: db.t3.micro
-    Description: Smallest general-purpose class to keep cost low.
+    Default: db.t4g.micro
+    Description: >
+      Smallest general-purpose class. Graviton (t4g) is ~10% cheaper than
+      t3.micro for the same 2 vCPU / 1 GiB.
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+    Description: >
+      Automated daily backups + point-in-time restore window. Storage for
+      backups up to the size of the database is free.
 
 Resources:
 
@@ -29,7 +39,7 @@ Resources:
   DBSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub '${ProjectName}/db'
+      # No fixed name: a deleted secret lingers 7-30 days and would block a redeploy.
       Description: RDS PostgreSQL credentials for Calorie Tracker
       GenerateSecretString:
         SecretStringTemplate: '{"username":"calorieadmin"}'
@@ -40,15 +50,17 @@ Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: Calorie Tracker DB subnet group
+      DBSubnetGroupDescription: Calorie Tracker DB subnet group (private subnets)
       SubnetIds:
-        - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet1Id'
-        - Fn::ImportValue: !Sub '${ProjectName}-PublicSubnet2Id'
+        - Fn::ImportValue: !Sub '${ProjectName}-PrivateSubnet1Id'
+        - Fn::ImportValue: !Sub '${ProjectName}-PrivateSubnet2Id'
 
+  # Deleting or replacing the database leaves a final snapshot
+  # (destroy.sh removes it unless --keep-data).
   Database:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
       DBInstanceIdentifier: !Sub '${ProjectName}-db'
       DBName: calorietracker
@@ -57,10 +69,15 @@ Resources:
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: '20'
       StorageType: gp3
+      # Encryption at rest with the AWS-managed RDS key (no extra cost).
+      StorageEncrypted: true
       MultiAZ: false
       PubliclyAccessible: false
-      BackupRetentionPeriod: 0
-      DeletionProtection: false
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      # destroy.sh switches this off before deleting the stack.
+      DeletionProtection: true
       MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
       DBSubnetGroupName: !Ref DBSubnetGroup

@@ -3,21 +3,18 @@ package com.calorietracker.aiservice.ai;
 import com.calorietracker.aiservice.dto.ParsedIngredient;
 import com.calorietracker.aiservice.dto.ParsedRecipe;
 import com.calorietracker.aiservice.dto.ParsedRecipeIngredient;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * Deterministic, offline stand-in for the Bedrock-backed parser. Active by
- * default so the stack runs locally with no AWS dependency.
+ * Deterministic, fully offline parser backed by a small built-in table.
+ * Used for tests and when ai-service runs on its own; the {@code library}
+ * provider also falls back to it for foods the library doesn't know.
  */
 @Component
-@ConditionalOnProperty(name = "calorietracker.ai.provider", havingValue = "mock", matchIfMissing = true)
+@ConditionalOnProperty(name = "calorietracker.ai.provider", havingValue = "mock")
 public class MockIngredientParser implements IngredientParser {
 
     /** Per single portion: {kcal, protein g, carbs g, fat g, fiber g, typical portion grams}. */
@@ -38,86 +35,90 @@ public class MockIngredientParser implements IngredientParser {
             Map.entry("yogurt",  new double[]{100, 10,   6,   4,    0,    170})
     );
 
+    /** Typical single-piece weights for common foods not in TABLE (count -> grams). */
+    private static final Map<String, Double> EXTRA_PORTIONS = Map.ofEntries(
+            Map.entry("potato", 150.0), Map.entry("orange", 130.0), Map.entry("tomato", 120.0),
+            Map.entry("pear", 180.0), Map.entry("carrot", 60.0), Map.entry("cucumber", 200.0),
+            Map.entry("pasta", 180.0), Map.entry("steak", 200.0), Map.entry("tuna", 100.0),
+            Map.entry("almond", 1.2), Map.entry("walnut", 4.0), Map.entry("strawberr", 12.0),
+            Map.entry("peach", 150.0), Map.entry("kiwi", 75.0), Map.entry("bagel", 100.0)
+    );
+
+    /** Unknown food: 100 kcal per 100 g "portion". */
     private static final double[] DEFAULT_MACROS = {100, 5, 15, 3, 2, 100};
-    private static final Pattern LEADING_QTY = Pattern.compile("(\\d+)");
 
     @Override
     public List<ParsedIngredient> parse(String text) {
-        List<ParsedIngredient> items = new ArrayList<>();
-        if (text == null || text.isBlank()) return items;
-        for (Parsed p : splitAndMatch(text)) {
-            items.add(new ParsedIngredient(
-                    p.name, String.valueOf(p.qty),
-                    (int) Math.round(p.macros[0] * p.qty),
-                    round(p.macros[1] * p.qty),
-                    round(p.macros[2] * p.qty),
-                    round(p.macros[3] * p.qty),
-                    round(p.macros[4] * p.qty)));
-        }
-        return items;
+        return MealText.split(text).stream().map(MockIngredientParser::estimate).toList();
     }
 
     @Override
     public ParsedRecipe parseRecipe(String text) {
         if (text == null || text.isBlank()) return new ParsedRecipe("My recipe", 1, List.of());
-        List<ParsedRecipeIngredient> ingredients = new ArrayList<>();
-        for (Parsed p : splitAndMatch(text)) {
-            double portionGrams = p.macros[5];
-            double totalGrams = portionGrams * p.qty;
-            ingredients.add(new ParsedRecipeIngredient(
-                    p.name,
-                    (int) Math.round(p.macros[0] / portionGrams * 100.0),
-                    round(p.macros[1] / portionGrams * 100.0),
-                    round(p.macros[2] / portionGrams * 100.0),
-                    round(p.macros[3] / portionGrams * 100.0),
-                    round(p.macros[4] / portionGrams * 100.0),
-                    totalGrams));
-        }
+        List<ParsedRecipeIngredient> ingredients =
+                MealText.split(text).stream().map(MockIngredientParser::estimateRecipeLine).toList();
         return new ParsedRecipe(suggestedRecipeName(text), 1, ingredients);
     }
 
-    private static final class Parsed {
-        String name;
-        int qty;
-        double[] macros;
+    /** Diary-style estimate for one item from the built-in table. */
+    static ParsedIngredient estimate(MealText.Item item) {
+        Match m = match(item.name());
+        double portions = item.grams() != null ? item.grams() / m.macros[5] : item.count();
+        return new ParsedIngredient(
+                m.name, quantityText(item),
+                (int) Math.round(m.macros[0] * portions),
+                round(m.macros[1] * portions),
+                round(m.macros[2] * portions),
+                round(m.macros[3] * portions),
+                round(m.macros[4] * portions));
     }
 
-    private List<Parsed> splitAndMatch(String text) {
-        List<Parsed> out = new ArrayList<>();
-        String[] parts = text.toLowerCase(Locale.ROOT).split(",|\\band\\b");
-        for (String raw : parts) {
-            String part = raw.trim();
-            if (part.isEmpty()) continue;
-            int qty = 1;
-            Matcher m = LEADING_QTY.matcher(part);
-            if (m.find()) qty = Math.max(1, Integer.parseInt(m.group(1)));
-            double[] macros = DEFAULT_MACROS;
-            String name = capitalize(part.replaceAll("\\d+", "").trim());
-            for (Map.Entry<String, double[]> e : TABLE.entrySet()) {
-                if (part.contains(e.getKey())) {
-                    macros = e.getValue();
-                    name = capitalize(e.getKey());
-                    break;
-                }
-            }
-            if (name.isBlank()) name = "Unknown item";
-            Parsed p = new Parsed();
-            p.name = name; p.qty = qty; p.macros = macros;
-            out.add(p);
+    /** Recipe-style estimate (per-100 g values + grams used) for one item. */
+    static ParsedRecipeIngredient estimateRecipeLine(MealText.Item item) {
+        Match m = match(item.name());
+        double portionGrams = m.macros[5];
+        double totalGrams = item.grams() != null ? item.grams() : portionGrams * item.count();
+        return new ParsedRecipeIngredient(
+                m.name,
+                (int) Math.round(m.macros[0] / portionGrams * 100.0),
+                round(m.macros[1] / portionGrams * 100.0),
+                round(m.macros[2] / portionGrams * 100.0),
+                round(m.macros[3] / portionGrams * 100.0),
+                round(m.macros[4] / portionGrams * 100.0),
+                totalGrams);
+    }
+
+    /** Grams of one typical piece/serving of {@code name}; 100 g when unknown. */
+    static double portionGrams(String name) {
+        for (Map.Entry<String, double[]> e : TABLE.entrySet()) {
+            if (name.contains(e.getKey())) return e.getValue()[5];
         }
-        return out;
+        for (Map.Entry<String, Double> e : EXTRA_PORTIONS.entrySet()) {
+            if (name.contains(e.getKey())) return e.getValue();
+        }
+        return 100.0;
     }
 
-    private static String suggestedRecipeName(String text) {
+    static String quantityText(MealText.Item item) {
+        if (item.grams() == null) return String.valueOf(item.count());
+        double g = item.grams();
+        return (g == Math.floor(g) ? String.valueOf((long) g) : String.valueOf(round(g))) + " g";
+    }
+
+    static String suggestedRecipeName(String text) {
         String trimmed = text.trim().replaceAll("\\s+", " ");
-        if (trimmed.length() <= 48) return capitalize(trimmed);
-        return capitalize(trimmed.substring(0, 45)) + "...";
+        if (trimmed.length() <= 48) return MealText.capitalize(trimmed);
+        return MealText.capitalize(trimmed.substring(0, 45)) + "...";
     }
 
-    private static String capitalize(String s) {
-        if (s == null || s.isBlank()) return s;
-        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
-    }
+    static double round(double v) { return Math.round(v * 10.0) / 10.0; }
 
-    private static double round(double v) { return Math.round(v * 10.0) / 10.0; }
+    private record Match(String name, double[] macros) {}
+
+    private static Match match(String name) {
+        for (Map.Entry<String, double[]> e : TABLE.entrySet()) {
+            if (name.contains(e.getKey())) return new Match(MealText.capitalize(e.getKey()), e.getValue());
+        }
+        return new Match(MealText.capitalize(name), DEFAULT_MACROS);
+    }
 }

@@ -1,9 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Calorie Tracker - Foundation: VPC with 2 public subnets (no NAT, to stay cheap),
-  security groups, a Cloud Map private DNS namespace (for Eureka discovery), and
-  ECR repositories. Region-agnostic — deploy in any region where you've granted
-  Bedrock model access (e.g. eu-central-1 or us-east-1).
+  Calorie Tracker - Foundation: VPC with 2 public subnets (ECS tasks; no NAT, to
+  stay cheap) and 2 private subnets (internal load balancer + database, no route
+  to the internet), security groups, a Cloud Map private DNS namespace (for
+  Eureka discovery), and ECR repositories.
 
 Parameters:
   ProjectName:
@@ -56,6 +56,46 @@ Resources:
       Tags:
         - { Key: Name, Value: !Sub '${ProjectName}-public-2' }
 
+  # Private subnets (no internet route): the load balancer and the database.
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-private-1' }
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.12.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-private-2' }
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: !Sub '${ProjectName}-private-rt' }
+
+  PrivateSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -87,24 +127,25 @@ Resources:
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Public ALB - allow HTTP from anywhere
+      GroupDescription: Internal ALB - reachable only from inside the VPC (CloudFront VPC origin)
       VpcId: !Ref Vpc
       SecurityGroupIngress:
-        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP }
+        # Internal ALB: reached only via CloudFront (04-app.yaml adds its prefix list).
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 10.0.0.0/16, Description: From inside the VPC (CloudFront VPC origin ENIs) }
       Tags:
         - { Key: Name, Value: !Sub '${ProjectName}-alb-sg' }
 
   EcsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: ECS tasks - from ALB on 8080, plus intra-service traffic
+      GroupDescription: ECS tasks - from ALB on 8080 (gateway + web client), plus intra-service traffic
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
           SourceSecurityGroupId: !Ref AlbSecurityGroup
-          Description: Gateway from ALB
+          Description: Gateway and web client from ALB
       Tags:
         - { Key: Name, Value: !Sub '${ProjectName}-ecs-sg' }
 
@@ -135,16 +176,18 @@ Resources:
   PrivateDnsNamespace:
     Type: AWS::ServiceDiscovery::PrivateDnsNamespace
     Properties:
-      Name: calorietracker.local
+      Name: !Sub '${ProjectName}.local'
       Vpc: !Ref Vpc
       Description: Private DNS for inter-service discovery (Eureka bootstrap)
 
   # ---------------- Container registries ----------------
+  # Keep the newest 5 images; EmptyOnDelete lets the stack delete a non-empty repo.
   EurekaRepo:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub '${ProjectName}-eureka-server'
       ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
       LifecyclePolicy:
         LifecyclePolicyText: |
           { "rules": [ { "rulePriority": 1, "description": "keep last 5",
@@ -156,6 +199,7 @@ Resources:
     Properties:
       RepositoryName: !Sub '${ProjectName}-api-gateway'
       ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
       LifecyclePolicy:
         LifecyclePolicyText: |
           { "rules": [ { "rulePriority": 1, "description": "keep last 5",
@@ -167,6 +211,7 @@ Resources:
     Properties:
       RepositoryName: !Sub '${ProjectName}-backend-core'
       ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
       LifecyclePolicy:
         LifecyclePolicyText: |
           { "rules": [ { "rulePriority": 1, "description": "keep last 5",
@@ -178,6 +223,19 @@ Resources:
     Properties:
       RepositoryName: !Sub '${ProjectName}-ai-service'
       ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 5",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5 },
+            "action": { "type": "expire" } } ] }
+
+  WebRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProjectName}-web-client'
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
       LifecyclePolicy:
         LifecyclePolicyText: |
           { "rules": [ { "rulePriority": 1, "description": "keep last 5",
@@ -194,6 +252,12 @@ Outputs:
   PublicSubnet2Id:
     Value: !Ref PublicSubnet2
     Export: { Name: !Sub '${ProjectName}-PublicSubnet2Id' }
+  PrivateSubnet1Id:
+    Value: !Ref PrivateSubnet1
+    Export: { Name: !Sub '${ProjectName}-PrivateSubnet1Id' }
+  PrivateSubnet2Id:
+    Value: !Ref PrivateSubnet2
+    Export: { Name: !Sub '${ProjectName}-PrivateSubnet2Id' }
   AlbSecurityGroupId:
     Value: !Ref AlbSecurityGroup
     Export: { Name: !Sub '${ProjectName}-AlbSgId' }
@@ -206,15 +270,3 @@ Outputs:
   NamespaceId:
     Value: !Ref PrivateDnsNamespace
     Export: { Name: !Sub '${ProjectName}-NamespaceId' }
-  EurekaRepoUri:
-    Value: !GetAtt EurekaRepo.RepositoryUri
-    Export: { Name: !Sub '${ProjectName}-EurekaRepoUri' }
-  GatewayRepoUri:
-    Value: !GetAtt GatewayRepo.RepositoryUri
-    Export: { Name: !Sub '${ProjectName}-GatewayRepoUri' }
-  CoreRepoUri:
-    Value: !GetAtt CoreRepo.RepositoryUri
-    Export: { Name: !Sub '${ProjectName}-CoreRepoUri' }
-  AiRepoUri:
-    Value: !GetAtt AiRepo.RepositoryUri
-    Export: { Name: !Sub '${ProjectName}-AiRepoUri' }

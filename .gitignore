@@ -18,10 +18,19 @@ target/
 *.log
 .env
 .env.*
+!web-client/.env.example
 .envrc
 
-# Local-only JWT signing key 
-local-private.pem
+# Node / web-client build output
+node_modules/
+web-client/dist/
+.vite/
+*.tsbuildinfo
+web-client/test-results/
+web-client/playwright-report/
+
+# Database dumps — these contain real user data.
+db-backups/
 
 # AWS credentials / config
 .aws/

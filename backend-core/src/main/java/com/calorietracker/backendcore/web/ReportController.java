@@ -2,6 +2,7 @@ package com.calorietracker.backendcore.web;
 
 import com.calorietracker.backendcore.dto.DailyNutritionPoint;
 import com.calorietracker.backendcore.dto.DailyWaterPoint;
+import com.calorietracker.backendcore.service.ClientClock;
 import com.calorietracker.backendcore.service.ReportService;
 import java.time.LocalDate;
 import java.util.List;
@@ -21,9 +22,11 @@ public class ReportController {
     private static final int MAX_RANGE_DAYS = 366;
 
     private final ReportService service;
+    private final ClientClock clock;
 
-    public ReportController(ReportService service) {
+    public ReportController(ReportService service, ClientClock clock) {
         this.service = service;
+        this.clock = clock;
     }
 
     /** Daily kcal + macros + fiber + per-day targets. Default range = last 7 days. */
@@ -49,8 +52,8 @@ public class ReportController {
     }
 
     /** Default-fills + validates the requested range. Rejects from &gt; to and ranges &gt; MAX_RANGE_DAYS. */
-    private static LocalDate[] sanitizeRange(LocalDate from, LocalDate to) {
-        LocalDate end = to == null ? LocalDate.now() : to;
+    private LocalDate[] sanitizeRange(LocalDate from, LocalDate to) {
+        LocalDate end = to == null ? clock.today() : to;
         LocalDate start = from == null ? end.minusDays(6) : from;
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("from must be on or before to");

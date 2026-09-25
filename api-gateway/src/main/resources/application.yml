@@ -5,29 +5,33 @@ spring:
   application:
     name: api-gateway
   cloud:
+    # 5 s instead of 35 s, so restarted services are routable quickly.
+    loadbalancer:
+      cache:
+        ttl: 5s
     gateway:
-      discovery:
-        locator:
-          # We define explicit routes below rather than auto-mapping every
-          # service. Explicit routes are clearer and safer to expose publicly.
-          enabled: false
-      routes:
-        # More-specific /api/ai/** routes to the dedicated AI service (Bedrock host).
-        # Order matters: gateway matches top-down, first match wins.
-        - id: ai-service
-          uri: lb://ai-service
-          predicates:
-            - Path=/api/ai/**
-        - id: backend-core
-          # lb:// = resolve 'backend-core' via Eureka + client-side load balancer
-          uri: lb://backend-core
-          predicates:
-            - Path=/api/**
+      server:
+        webflux:
+          discovery:
+            locator:
+              # Explicit routes only; nothing else is exposed.
+              enabled: false
+          routes:
+            # First match wins, so the specific /api/ai/** comes first.
+            - id: ai-service
+              uri: lb://ai-service
+              predicates:
+                - Path=/api/ai/**
+            - id: backend-core
+              uri: lb://backend-core
+              predicates:
+                - Path=/api/**
 
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+    registry-fetch-interval-seconds: 5
   instance:
     prefer-ip-address: true
 
@@ -35,7 +39,12 @@ management:
   endpoints:
     web:
       exposure:
-        # Deliberately NOT exposing `gateway` here - that endpoint enumerates
-        # routes (lb://backend-core, lb://ai-service, ...) which is unnecessary
-        # internal detail to surface to unauthenticated callers.
+        # Not `gateway`: it would list the internal routes.
         include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      # Public (health checks), so only UP/DOWN - no internal details.
+      show-details: never
+      show-components: never

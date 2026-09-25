@@ -29,6 +29,11 @@ public class ProfileView extends BorderPane {
     private final ApiClient api;
     /** Notifies the shell after a successful save so it can lift the onboarding lock. */
     private final Runnable onSaved;
+    /** Deletes the account (runs off the FX thread); null hides the section. */
+    private final java.util.concurrent.Callable<Void> deleteAccount;
+    /** Tells the shell the account is gone (FX thread). */
+    private final Runnable onAccountDeleted;
+    private final boolean cognitoMode;
 
     private final TextField nameField = new TextField();
     private final ComboBox<Sex> sexBox = new ComboBox<>(FXCollections.observableArrayList(Sex.values()));
@@ -45,15 +50,23 @@ public class ProfileView extends BorderPane {
     private Integer lastSavedBmr;
 
     public ProfileView(ApiClient api) {
-        this(api, null);
+        this(api, null, null, null, false);
     }
 
-    public ProfileView(ApiClient api, Runnable onSaved) {
+    public ProfileView(ApiClient api, Runnable onSaved,
+                       java.util.concurrent.Callable<Void> deleteAccount, Runnable onAccountDeleted,
+                       boolean cognitoMode) {
         this.api = api;
         this.onSaved = onSaved;
+        this.deleteAccount = deleteAccount;
+        this.onAccountDeleted = onAccountDeleted;
+        this.cognitoMode = cognitoMode;
         ageSpinner.setEditable(true);
         heightSpinner.setEditable(true);
         weightSpinner.setEditable(true);
+        NumericSpinners.tidy(ageSpinner, true);
+        NumericSpinners.tidy(heightSpinner, false);
+        NumericSpinners.tidy(weightSpinner, false);
         sexBox.getSelectionModel().select(Sex.MALE);
         activityBox.getSelectionModel().select(ActivityLevel.MODERATE);
 
@@ -143,6 +156,7 @@ public class ProfileView extends BorderPane {
         onboardingBanner.setManaged(false);
 
         VBox content = new VBox(16, onboardingBanner, statsCard, formCard, formulaCard);
+        if (deleteAccount != null) content.getChildren().add(buildDeleteCard());
         content.setPadding(new Insets(20));
         content.setAlignment(Pos.TOP_CENTER);
 
@@ -248,5 +262,38 @@ public class ProfileView extends BorderPane {
             com.calorietracker.desktop.AppContext.prepareDialog(alert);
             alert.showAndWait();
         });
+    }
+
+    /** Irreversible: removes every diary entry, food, recipe, weight and the account itself. */
+    private VBox buildDeleteCard() {
+        Label title = sectionTitle("Delete account");
+        Label text = new Label("Permanently deletes your profile, diary, water and weight history, "
+                + "objectives, and your own foods and recipes" + (cognitoMode ? ", then your login" : "")
+                + ". This cannot be undone.");
+        text.setWrapText(true);
+        text.getStyleClass().add("muted");
+        Button delete = new Button("Delete my account…");
+        delete.getStyleClass().add("danger-button");
+        delete.setOnAction(e -> confirmDelete());
+        VBox card = new VBox(10, title, text, delete);
+        card.getStyleClass().addAll("card", "danger-zone");
+        card.setMaxWidth(540);
+        return card;
+    }
+
+    private void confirmDelete() {
+        javafx.scene.control.TextInputDialog confirm = new javafx.scene.control.TextInputDialog();
+        confirm.setTitle("Delete account");
+        confirm.setHeaderText("Everything will be erased immediately.");
+        confirm.setContentText("Type DELETE to confirm:");
+        com.calorietracker.desktop.AppContext.prepareDialog(confirm);
+        Button ok = (Button) confirm.getDialogPane().lookupButton(javafx.scene.control.ButtonType.OK);
+        ok.setText("Delete forever");
+        ok.disableProperty().bind(confirm.getEditor().textProperty().isNotEqualTo("DELETE"));
+        confirm.showAndWait()
+                .filter("DELETE"::equals)
+                .ifPresent(typed -> Async.run(deleteAccount, ignored -> {
+                    if (onAccountDeleted != null) onAccountDeleted.run();
+                }));
     }
 }

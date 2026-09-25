@@ -75,4 +75,13 @@ class NutritionFillerTest {
         double reconstructed = 4 * ing.proteinPer100g() + 4 * ing.carbsPer100g() + 9 * ing.fatPer100g();
         assertThat(reconstructed).isCloseTo(200, org.assertj.core.data.Offset.offset(1.5));
     }
+
+    @Test
+    void keepsGenuineZeroWhenOtherMacrosExplainTheCalories() {
+        // Chicken breast: 31 P + 3.6 F = 156 kcal of 165 -> 0 g carbs is real.
+        var item = new ParsedIngredient("chicken", "100 g", 165, 31, 0, 3.6, 0);
+        var out = NutritionFiller.fillItems(List.of(item)).get(0);
+        assertThat(out.carbs()).isZero();
+        assertThat(out.protein()).isEqualTo(31);
+    }
 }

@@ -41,6 +41,7 @@ public class WeightView extends BorderPane {
     public WeightView(ApiClient api) {
         this.api = api;
         weightSpinner.setEditable(true);
+        NumericSpinners.tidy(weightSpinner, false);
 
         // ---- log bar ----
         Button logBtn = new Button("Save weight");

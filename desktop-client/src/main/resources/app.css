@@ -703,3 +703,57 @@
     -fx-border-color: #a7f3d0;
     -fx-border-radius: 8;
 }
+
+/* Show/Hide button next to a password field. */
+.password-toggle {
+    -fx-background-color: transparent;
+    -fx-text-fill: #2b6cb0;
+    -fx-font-weight: bold;
+    -fx-font-size: 12px;
+    -fx-padding: 6 8 6 8;
+    -fx-cursor: hand;
+}
+.password-toggle:hover {
+    -fx-background-color: #ebf8ff;
+    -fx-background-radius: 6;
+}
+
+/* Live password requirements: grey until met, then green. */
+.password-rules {
+    -fx-background-color: #f7fafc;
+    -fx-border-color: #e2e8f0;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 8 10 8 10;
+}
+.password-rules .label {
+    -fx-text-fill: #718096;
+    -fx-font-size: 12px;
+}
+.password-rules .label.met {
+    -fx-text-fill: #38a169;
+}
+
+/* Information / warning boxes in forms and dialogs. */
+.notice {
+    -fx-background-color: #ebf8ff;
+    -fx-border-color: transparent transparent transparent #4299e1;
+    -fx-border-width: 0 0 0 4;
+    -fx-background-radius: 6;
+    -fx-padding: 8 10 8 10;
+}
+.notice.warn {
+    -fx-background-color: #fffaf0;
+    -fx-border-color: transparent transparent transparent #ed8936;
+}
+
+/* Profile -> Delete account: a red outline marks the irreversible action. */
+.danger-zone {
+    -fx-border-color: #fed7d7;
+    -fx-border-width: 1;
+    -fx-border-radius: 10;
+}
+.danger-zone .danger-button {
+    -fx-border-color: #e53e3e;
+    -fx-border-radius: 6;
+}

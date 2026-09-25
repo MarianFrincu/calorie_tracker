@@ -1,0 +1,47 @@
+# Calorie Tracker settings. Copy to .envrc (gitignored) and keep only what you
+# change:
+#
+#   cp .envrc.example .envrc
+#
+# Every line is optional; the value shown is the default. That's why a real
+# .envrc is usually much shorter than this file. `make up` reads only the AI
+# lines; the AWS commands read everything.
+
+# ── AI (local and AWS) ────────────────────────────────────────────────────────
+# With a key the AI tab uses Google Gemini, otherwise the built-in food library.
+# Free key: https://aistudio.google.com/app/apikey
+export GEMINI_API_KEY=""                                 # secret - never commit it
+# export AI_PROVIDER="gemini"                            # gemini | library
+# export GEMINI_MODEL="gemini-3.5-flash-lite"
+# export GEMINI_FALLBACK_MODEL="gemini-3.1-flash-lite"   # tried when the first is busy; "" = retry the same
+# export AI_RATE_LIMIT_PER_MINUTE="10"                   # per user
+# export AI_RATE_LIMIT_PER_DAY="200"
+
+# ── AWS ───────────────────────────────────────────────────────────────────────
+# Credentials come from `aws configure`, never from this file.
+export AWS_DEFAULT_REGION="eu-central-1"
+# export PROJECT="calorietracker"                        # prefix of every stack and resource
+# export BUDGET_EMAIL="you@example.com"                  # free cost alert at 50% / 100%
+# export BUDGET_LIMIT_USD="10"                           # per month, credits not subtracted
+# export ENABLE_WAF="false"                              # true = AWS WAF, +$0.011/hour
+# export MAX_TASKS="3"                                   # auto-scaling ceiling per service
+# export DB_ENGINE_VERSION="16.15"                       # a PostgreSQL 16 version RDS offers
+# export IMAGE_TAG="latest"
+
+# Custom domain (optional; otherwise https://<id>.cloudfront.net). The ACM
+# certificate must be in us-east-1.
+# export DOMAIN_NAME="app.example.com"
+# export CLOUDFRONT_CERT_ARN="arn:aws:acm:us-east-1:123456789012:certificate/..."
+
+# CI/CD from GitHub (optional). Create the connection once in the console:
+# Developer Tools > Settings > Connections. Commit and push before the next
+# `make deploy`: the pipeline's first run deploys what's on GitHub.
+# export GH_CONN_ARN="arn:aws:codeconnections:eu-central-1:123456789012:connection/..."
+# export GH_REPO="your-user/calorie_tracker"
+# export GH_BRANCH="main"
+
+# ── Not read from this file ───────────────────────────────────────────────────
+# Browser tests:  E2E_BASE_URL=... E2E_EMAIL=... E2E_PASSWORD=... [E2E_ALLOW_DELETE=1] make e2e
+# Desktop client: API_BASE_URL, AUTH_MODE, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID
+#                 (make desktop-cloud sets them for you)
+# Web dev server: web-client/.env.example

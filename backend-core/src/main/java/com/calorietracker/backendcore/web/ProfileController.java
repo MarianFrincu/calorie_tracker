@@ -5,6 +5,8 @@ import com.calorietracker.backendcore.dto.UpdateProfileRequest;
 import com.calorietracker.backendcore.service.CurrentUserService;
 import com.calorietracker.backendcore.service.UserProfileService;
 import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -33,5 +35,12 @@ public class ProfileController {
     @PutMapping
     public ProfileResponse update(@Valid @RequestBody UpdateProfileRequest req) {
         return ProfileResponse.of(profileService.updateCurrent(req));
+    }
+
+    /** Deletes the account and all of its data. Irreversible. */
+    @DeleteMapping
+    public ResponseEntity<Void> delete() {
+        profileService.deleteCurrent();
+        return ResponseEntity.noContent().build();
     }
 }

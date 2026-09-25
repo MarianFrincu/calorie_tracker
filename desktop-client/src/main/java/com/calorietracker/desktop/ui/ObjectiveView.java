@@ -3,6 +3,7 @@ package com.calorietracker.desktop.ui;
 import com.calorietracker.desktop.api.ApiClient;
 import com.calorietracker.desktop.model.Goal;
 import com.calorietracker.desktop.model.MacroPreset;
+import com.calorietracker.desktop.model.NutritionCalc;
 import com.calorietracker.desktop.model.Objective;
 import com.calorietracker.desktop.model.Profile;
 import javafx.geometry.Insets;
@@ -44,6 +45,9 @@ public class ObjectiveView extends BorderPane {
 
     /** Maintenance TDEE, computed from the profile - baseline for percent math. */
     private Integer tdee;
+    /** Calories burned at rest: a losing target never goes below it. */
+    private Integer bmr;
+    private Double weightKg;
     /** Last objective loaded from the server. Edit dialog opens with these as defaults. */
     private Objective currentObjective;
 
@@ -116,6 +120,8 @@ public class ObjectiveView extends BorderPane {
     private void loadAll() {
         Async.run(api::getProfile, (Profile p) -> {
             tdee = p.tdeeMaintain();
+            bmr = p.bmr();
+            weightKg = p.weightKg();
             Async.run(api::getObjective, this::applyObjective);
         });
     }
@@ -152,7 +158,10 @@ public class ObjectiveView extends BorderPane {
             case GAIN     -> (o.goalPercent() == null ? "?" : o.goalPercent()) + "% over TDEE";
             case MAINTAIN -> "at TDEE";
         };
-        targetSubtitle.setText("Currently " + dir + " (TDEE " + tdee + " kcal)");
+        boolean heldAtBmr = o.goal() == Goal.LOSE && t.equals(bmr);
+        targetSubtitle.setText(heldAtBmr
+                ? "Held at your BMR, the lowest safe target (TDEE " + tdee + " kcal)"
+                : "Currently " + dir + " (TDEE " + tdee + " kcal)");
         proteinValue.setText(safe(o.dailyProteinTargetG()) + " g");
         carbsValue  .setText(safe(o.dailyCarbsTargetG())   + " g");
         fatValue    .setText(safe(o.dailyFatTargetG())     + " g");
@@ -169,11 +178,11 @@ public class ObjectiveView extends BorderPane {
     }
 
     private void openEditDialog() {
-        if (tdee == null || currentObjective == null) {
+        if (tdee == null || bmr == null || currentObjective == null) {
             Async.showWarning("Profile + objective are still loading. Try again in a moment.");
             return;
         }
-        new ObjectiveEditDialog(api, currentObjective, tdee).showAndWait()
+        new ObjectiveEditDialog(api, currentObjective, tdee, bmr, weightKg).showAndWait()
                 .ifPresent(updated -> applyObjective(updated));
     }
 
@@ -200,7 +209,7 @@ public class ObjectiveView extends BorderPane {
 
         private static final Integer[] PERCENT_CHOICES = { 10, 15, 20, 25, 30 };
 
-        ObjectiveEditDialog(ApiClient api, Objective initial, Integer tdee) {
+        ObjectiveEditDialog(ApiClient api, Objective initial, int tdee, int bmr, Double weightKg) {
             setTitle("Change objective");
             setHeaderText("Pick a goal, intensity and macro distribution. The new values "
                     + "apply from today onwards; past days keep their historical target.");
@@ -224,10 +233,27 @@ public class ObjectiveView extends BorderPane {
             javafx.scene.control.Spinner<Integer> waterSpinner = new javafx.scene.control.Spinner<>(500, 6000, 2000, 100);
             fiberSpinner.setEditable(true);
             waterSpinner.setEditable(true);
+            NumericSpinners.tidy(fiberSpinner, true);
+            NumericSpinners.tidy(waterSpinner, true);
+
+            // Cuts that would go below BMR are listed but can't be picked for "Lose weight".
+            int maxLose = PERCENT_CHOICES[0];
+            for (int c : PERCENT_CHOICES) if (!NutritionCalc.belowBmr(tdee, bmr, c)) maxLose = c;
+            final int deepestSafe = maxLose;
+            percentBox.setCellFactory(lv -> new javafx.scene.control.ListCell<>() {
+                @Override protected void updateItem(Integer p, boolean empty) {
+                    super.updateItem(p, empty);
+                    if (empty || p == null) { setText(null); setDisable(false); return; }
+                    boolean tooLow = goalBox.getValue() == Goal.LOSE && p > deepestSafe;
+                    setText(tooLow ? p + "% (below your BMR)" : p + "%");
+                    setDisable(tooLow);
+                }
+            });
 
             // Seed with the user's current objective so opening + immediately closing is a no-op.
             goalBox.setValue(initial.goal() == null ? Goal.MAINTAIN : initial.goal());
-            percentBox.setValue(snapPercent(initial.goalPercent() == null ? 20 : initial.goalPercent()));
+            int startPercent = snapPercent(initial.goalPercent() == null ? 20 : initial.goalPercent());
+            percentBox.setValue(goalBox.getValue() == Goal.LOSE ? Math.min(startPercent, deepestSafe) : startPercent);
             presetBox.setValue(initial.macroPreset() == null ? MacroPreset.BALANCED : initial.macroPreset());
             if (initial.dailyFiberTargetG() != null) fiberSpinner.getValueFactory().setValue(initial.dailyFiberTargetG());
             if (initial.dailyWaterTargetMl() != null) waterSpinner.getValueFactory().setValue(initial.dailyWaterTargetMl());
@@ -241,10 +267,21 @@ public class ObjectiveView extends BorderPane {
             form.addRow(3, mutedLabel("Daily fiber (g)"),    fiberSpinner);
             form.addRow(4, mutedLabel("Daily water (ml)"),   waterSpinner);
 
-            Label hint = new Label("Intensity is the % of TDEE you cut (lose) or add (gain). "
-                    + "Ignored when goal = Maintain.");
+            Label hint = new Label("Intensity is how much of your maintenance calories (TDEE, " + tdee
+                    + " kcal) you cut to lose weight or add to gain it. It isn't used for Maintain.");
             hint.getStyleClass().add("muted");
             hint.setWrapText(true);
+
+            Label bmrNotice = new Label("Your target never goes below your BMR (" + bmr + " kcal). That's what "
+                    + "your body burns at complete rest; eating less slows your metabolism and costs muscle. "
+                    + "At your activity level the deepest safe cut is " + deepestSafe + "%.");
+            bmrNotice.getStyleClass().addAll("notice", "warn");
+            bmrNotice.setWrapText(true);
+            bmrNotice.setMaxWidth(Double.MAX_VALUE);
+            Label proteinNotice = new Label();
+            proteinNotice.getStyleClass().add("notice");
+            proteinNotice.setWrapText(true);
+            proteinNotice.setMaxWidth(Double.MAX_VALUE);
 
             // Live preview line.
             Label preview = new Label();
@@ -259,31 +296,48 @@ public class ObjectiveView extends BorderPane {
 
             Runnable refresh = () -> {
                 int pct = goalBox.getValue() == Goal.MAINTAIN ? 0 : percentBox.getValue();
-                double adj = switch (goalBox.getValue()) {
-                    case LOSE -> -pct / 100.0;
-                    case GAIN -> +pct / 100.0;
-                    case MAINTAIN -> 0.0;
-                };
-                int kcal = (int) Math.round(tdee * (1.0 + adj));
+                int kcal = NutritionCalc.target(tdee, goalBox.getValue(), pct, bmr);
                 MacroPreset p = presetBox.getValue();
-                int protein = (int) Math.round(kcal * (p.proteinPercent / 100.0) / 4.0);
-                int carbs   = (int) Math.round(kcal * (p.carbsPercent   / 100.0) / 4.0);
-                int fat     = (int) Math.round(kcal * (p.fatPercent     / 100.0) / 9.0);
-                preview.setText(kcal + " kcal/day · P " + protein + " g · C " + carbs + " g · F " + fat + " g");
+                NutritionCalc.MacroGrams g = NutritionCalc.macroGrams(kcal, p, weightKg);
+                preview.setText(kcal + " kcal/day · P " + g.protein() + " g · C " + g.carbs()
+                        + " g · F " + g.fat() + " g");
+
+                boolean losing = goalBox.getValue() == Goal.LOSE;
+                bmrNotice.setVisible(losing);
+                bmrNotice.setManaged(losing);
+                boolean capped = NutritionCalc.proteinCapped(kcal, p, weightKg);
+                if (capped) {
+                    proteinNotice.setText("Protein is capped at " + NutritionCalc.MAX_PROTEIN_G_PER_KG
+                            + " g per kg of body weight (" + Math.round(NutritionCalc.MAX_PROTEIN_G_PER_KG * weightKg)
+                            + " g for " + weightKg + " kg). More brings no extra benefit, so the rest of those "
+                            + "calories go to carbs and fat.");
+                }
+                proteinNotice.setVisible(capped);
+                proteinNotice.setManaged(capped);
+                if (getDialogPane().getScene() != null && getDialogPane().getScene().getWindow() != null) {
+                    getDialogPane().getScene().getWindow().sizeToScene();
+                }
             };
-            goalBox.valueProperty().addListener((o, a, b) -> refresh.run());
+            goalBox.valueProperty().addListener((o, a, b) -> {
+                // Re-draw the list so the "below your BMR" entries follow the goal.
+                percentBox.getItems().setAll(PERCENT_CHOICES);
+                if (b == Goal.LOSE && percentBox.getValue() != null && percentBox.getValue() > deepestSafe) {
+                    percentBox.setValue(deepestSafe);
+                }
+                refresh.run();
+            });
             percentBox.valueProperty().addListener((o, a, b) -> refresh.run());
             presetBox.valueProperty().addListener((o, a, b) -> refresh.run());
             fiberSpinner.valueProperty().addListener((o, a, b) -> refresh.run());
             waterSpinner.valueProperty().addListener((o, a, b) -> refresh.run());
-            refresh.run();
-
-            VBox content = new VBox(12, form, hint, previewRow);
+            VBox content = new VBox(12, form, hint, bmrNotice, proteinNotice, previewRow);
             content.setPadding(new Insets(14));
             content.setMinWidth(520);
             getDialogPane().setContent(content);
             getDialogPane().getButtonTypes().addAll(
                     javafx.scene.control.ButtonType.OK, javafx.scene.control.ButtonType.CANCEL);
+            getDialogPane().getStylesheets().add(ObjectiveView.class.getResource("/app.css").toExternalForm());
+            setOnShown(e -> refresh.run());
 
             // Do the POST inside an event filter so we can keep the dialog
             // open + show a friendly error if the server rejects.

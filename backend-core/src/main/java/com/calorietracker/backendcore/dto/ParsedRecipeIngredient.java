@@ -1,5 +1,6 @@
 package com.calorietracker.backendcore.dto;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
@@ -12,10 +13,10 @@ import jakarta.validation.constraints.Size;
  */
 public record ParsedRecipeIngredient(
         @NotBlank @Size(max = 200) String name,
-        @PositiveOrZero int kcalPer100g,
-        @PositiveOrZero double proteinPer100g,
-        @PositiveOrZero double carbsPer100g,
-        @PositiveOrZero double fatPer100g,
-        @PositiveOrZero double fiberPer100g,
-        @Positive double amountGrams) {
+        @PositiveOrZero @Max(1500) int kcalPer100g,
+        @PositiveOrZero @Max(100) double proteinPer100g,
+        @PositiveOrZero @Max(100) double carbsPer100g,
+        @PositiveOrZero @Max(100) double fatPer100g,
+        @PositiveOrZero @Max(100) double fiberPer100g,
+        @Positive @Max(100_000) double amountGrams) {
 }

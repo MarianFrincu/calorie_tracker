@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import java.util.List;
@@ -19,7 +20,7 @@ import java.util.List;
  */
 public record ParsedRecipe(
         @NotBlank @Size(max = 200) String name,
-        Integer servings,
+        @Positive @Max(1000) Integer servings,
         @NotEmpty @Size(max = 100) @Valid List<ParsedRecipeIngredient> ingredients,
         /** Cooked-weight in grams (optional). 0 / null → server falls back to raw sum. */
         @PositiveOrZero @Max(100_000) Double totalCookedGrams) {

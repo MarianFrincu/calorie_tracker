@@ -10,21 +10,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Turns ugly exceptions into one-sentence English messages suitable for an
- * end-user alert. The goal is to never show a raw JSON body, a stack trace,
- * or a Java exception class name to the user.
- *
- * <p>Strategy:
- * <ol>
- *   <li>If the cause is an {@link ApiException}, prefer the parsed {@code message}
- *       field from the backend's error JSON. Otherwise fall back to a polite
- *       sentence based on the HTTP status code.</li>
- *   <li>For network errors (connect refused, DNS, timeouts) use friendly,
- *       action-oriented copy.</li>
- *   <li>For anything else, use the exception's {@code getMessage()} if it
- *       looks human (short, no JSON, no class names), otherwise a generic
- *       "Something went wrong" line.</li>
- * </ol>
+ * Turns any exception into one plain sentence for the user - never JSON, a
+ * stack trace, a status code or a class name. API errors use the server's
+ * message (or a sentence per status), network errors get specific advice.
  */
 public final class Messages {
 
@@ -40,6 +28,7 @@ public final class Messages {
         // Walk the chain a bit; the real cause is often wrapped.
         for (Throwable cur = t; cur != null; cur = cur.getCause()) {
             if (cur instanceof ApiException ae) return apiMessage(ae);
+            if (cur instanceof com.calorietracker.desktop.api.CognitoException ce) return ce.getMessage();
 
             if (cur instanceof UnknownHostException) {
                 return "Can't reach the server. Check your internet connection.";
@@ -87,7 +76,9 @@ public final class Messages {
     /** Friendly sentence per HTTP status family. */
     public static String statusCopy(int status) {
         return switch (status) {
-            case 400 -> "The request looks wrong. Double-check the values and try again.";
+            case 400 -> "Some of the details aren't valid. Please check them and try again.";
+            case 413 -> "That's too much to send at once.";
+            case 426 -> "Your connection is too old to be secure. Please update Java or your system.";
             case 401 -> "Your session has expired. Please sign in again.";
             case 403 -> "You don't have permission to do that.";
             case 404 -> "We couldn't find what you were looking for.";
@@ -95,7 +86,7 @@ public final class Messages {
             case 409 -> "That can't be done right now (the data is in conflict).";
             case 429 -> "Too many requests. Please wait a moment and try again.";
             case 500, 502, 503 -> "The server had a problem. Please try again in a moment.";
-            default -> "Something went wrong (HTTP " + status + ").";
+            default -> "Something went wrong. Please try again.";
         };
     }
 

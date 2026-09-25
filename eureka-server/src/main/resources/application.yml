@@ -6,20 +6,32 @@ spring:
   application:
     name: eureka-server
 
+# Locally (docker compose): one standalone registry, as configured below.
+# On AWS: two peers, eureka-a and eureka-b, that replicate to each other. Each
+# gets EUREKA_INSTANCE_HOSTNAME=<own DNS name>, EUREKA_CLIENT_REGISTERWITHEUREKA
+# and _FETCHREGISTRY=true, and EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=<the other
+# one> (infra/cloudformation/04-app.yaml).
 eureka:
   instance:
     hostname: localhost
   client:
-    # A standalone registry must NOT try to register with or fetch from itself.
-    # (These become 'true' only if you run a clustered/peer-aware Eureka.)
+    # Standalone: don't register with or fetch from itself.
     register-with-eureka: false
     fetch-registry: false
     service-url:
       defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
   server:
-    # Disable self-preservation locally so dead instances are evicted quickly
-    # during development. In production you typically leave this ON (true).
+    # Off on purpose: with a handful of tasks that ECS replaces on every
+    # deploy, self-preservation would keep dead instances registered and the
+    # gateway would route to them. Dead instances go within ~30 s instead.
     enable-self-preservation: false
+    # Serve registry changes within ~5 s (default read-only cache: 30 s).
+    use-read-only-response-cache: false
+    response-cache-update-interval-ms: 5000
+    eviction-interval-timer-in-ms: 10000
+    # A server that starts while its peer is empty (first deploy, or both
+    # restarted) would otherwise refuse registry reads for 5 minutes.
+    wait-time-in-ms-when-sync-empty: 0
 
 management:
   endpoints:

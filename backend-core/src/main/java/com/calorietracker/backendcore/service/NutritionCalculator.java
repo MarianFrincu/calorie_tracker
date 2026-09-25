@@ -11,13 +11,21 @@ import com.calorietracker.backendcore.model.Sex;
  *
  * <p>BMR uses Mifflin-St Jeor. TDEE = BMR × activity multiplier. The calorie
  * target is then TDEE × (1 + goalAdjustment), where the adjustment is derived
- * from {@code goal} + {@code goalPercent} (e.g. LOSE 20 → ×0.80).
+ * from {@code goal} + {@code goalPercent} (e.g. LOSE 20 → ×0.80) - but never
+ * below BMR: eating less than the body burns at rest isn't a safe diet.
  *
  * <p>Macro grams come from the {@link MacroPreset} percentages applied to the
- * calorie target (protein/carbs at 4 kcal/g, fat at 9 kcal/g). Fiber is
+ * calorie target (protein/carbs at 4 kcal/g, fat at 9 kcal/g), with protein
+ * capped at {@value #MAX_PROTEIN_G_PER_KG} g per kg of body weight. Fiber is
  * tracked separately on the user (default 30 g/day).
+ *
+ * <p>Mirrored for live previews in web-client/src/lib/nutrition.ts and the
+ * desktop client's NutritionCalc - keep all three in step.
  */
 public final class NutritionCalculator {
+
+    /** More protein than this has no extra benefit and crowds out carbs and fat. */
+    public static final double MAX_PROTEIN_G_PER_KG = 2.2;
 
     private NutritionCalculator() {}
 
@@ -52,14 +60,19 @@ public final class NutritionCalculator {
     }
 
     /**
-     * Final calorie target = TDEE × (1 + signedPercent/100). Returns null if
-     * any input is missing.
+     * Final calorie target = TDEE × (1 + signedPercent/100), never below BMR.
+     * Returns null if any input is missing.
      *
      * @param goalPercent magnitude, e.g. 20 (clamped to [0, 50])
      */
     public static Integer dailyCalorieTarget(AppUser u, Goal goal, Integer goalPercent) {
         Integer tdee = tdeeMaintain(u);
         if (tdee == null || goal == null) return null;
+        int target = adjust(tdee, goal, goalPercent);
+        return Math.max(target, bmr(u));
+    }
+
+    private static int adjust(int tdee, Goal goal, Integer goalPercent) {
         int pct = goalPercent == null ? 0 : Math.max(0, Math.min(50, goalPercent));
         double adj = switch (goal) {
             case LOSE     -> -pct / 100.0;
@@ -76,12 +89,29 @@ public final class NutritionCalculator {
     /**
      * Macro grams derived from the calorie target and the preset's
      * protein/carbs/fat percentages. Protein and carbs are 4 kcal/g, fat is 9 kcal/g.
+     *
+     * <p>Protein is capped at {@value #MAX_PROTEIN_G_PER_KG} g/kg of
+     * {@code weightKg} (no cap when it's unknown). The calories above the cap go
+     * to carbs and fat in the preset's own proportion - so keto stays low-carb -
+     * and the total stays the same.
      */
-    public static MacroGrams macroGrams(int calories, MacroPreset preset) {
+    public static MacroGrams macroGrams(int calories, MacroPreset preset, Double weightKg) {
         if (preset == null) preset = MacroPreset.BALANCED;
-        int protein = (int) Math.round(calories * (preset.proteinPercent / 100.0) / 4.0);
-        int carbs   = (int) Math.round(calories * (preset.carbsPercent   / 100.0) / 4.0);
-        int fat     = (int) Math.round(calories * (preset.fatPercent     / 100.0) / 9.0);
-        return new MacroGrams(protein, carbs, fat);
+        double proteinKcal = calories * preset.proteinPercent / 100.0;
+        double carbsKcal   = calories * preset.carbsPercent   / 100.0;
+        double fatKcal     = calories * preset.fatPercent     / 100.0;
+        if (weightKg != null && weightKg > 0) {
+            double maxProteinKcal = MAX_PROTEIN_G_PER_KG * weightKg * 4.0;
+            if (proteinKcal > maxProteinKcal) {
+                double spare = proteinKcal - maxProteinKcal;
+                int rest = preset.carbsPercent + preset.fatPercent;
+                proteinKcal = maxProteinKcal;
+                carbsKcal += spare * preset.carbsPercent / rest;
+                fatKcal   += spare * preset.fatPercent / rest;
+            }
+        }
+        return new MacroGrams((int) Math.round(proteinKcal / 4.0),
+                (int) Math.round(carbsKcal / 4.0),
+                (int) Math.round(fatKcal / 9.0));
     }
 }

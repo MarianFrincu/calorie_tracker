@@ -3,7 +3,6 @@ package com.calorietracker.backendcore.service;
 import com.calorietracker.backendcore.dto.UpdateProfileRequest;
 import com.calorietracker.backendcore.model.AppUser;
 import com.calorietracker.backendcore.repository.AppUserRepository;
-import java.time.LocalDate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,13 +17,16 @@ public class UserProfileService {
     private final AppUserRepository repository;
     private final CurrentUserService currentUser;
     private final ObjectiveService objectives;
+    private final ClientClock clock;
 
     public UserProfileService(AppUserRepository repository,
                               CurrentUserService currentUser,
-                              ObjectiveService objectives) {
+                              ObjectiveService objectives,
+                              ClientClock clock) {
         this.repository = repository;
         this.currentUser = currentUser;
         this.objectives = objectives;
+        this.clock = clock;
     }
 
     @Transactional
@@ -48,8 +50,21 @@ public class UserProfileService {
             // written it stays put — explicit objective edits won't touch it.
             objectives.ensureBaselineHistory(u);
             // New body stats also imply new targets for today; snapshot now.
-            objectives.snapshotToHistory(u, LocalDate.now());
+            objectives.snapshotToHistory(u, clock.today());
         }
         return u;
+    }
+
+    /**
+     * Permanently deletes the caller and everything they own. Diary, water,
+     * weight, objective history, private ingredients and recipes all go via
+     * ON DELETE CASCADE in the schema. The Cognito identity itself is deleted
+     * by the client (DeleteUser needs the user's own access token).
+     */
+    @Transactional
+    public void deleteCurrent() {
+        Long id = currentUser.current().getId();
+        repository.deleteRecipeLinesOwnedBy(id);
+        repository.deleteById(id);
     }
 }

@@ -5,6 +5,7 @@ import com.calorietracker.aiservice.ai.NutritionFiller;
 import com.calorietracker.aiservice.dto.ParseRequest;
 import com.calorietracker.aiservice.dto.ParseResult;
 import com.calorietracker.aiservice.dto.ParsedRecipe;
+import com.calorietracker.aiservice.ratelimit.AiQuota;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,20 +24,24 @@ import org.springframework.web.bind.annotation.RestController;
 public class AiController {
 
     private final IngredientParser parser;
+    private final AiQuota quota;
 
-    public AiController(IngredientParser parser) {
+    public AiController(IngredientParser parser, AiQuota quota) {
         this.parser = parser;
+        this.quota = quota;
     }
 
     /** Diary-style parse: per-portion macros + quantity. */
     @PostMapping("/parse")
     public ParseResult parse(@Valid @RequestBody ParseRequest req) {
+        quota.consume(); // after validation: a bad request costs no quota
         return ParseResult.of(NutritionFiller.fillItems(parser.parse(req.text())));
     }
 
     /** Recipe-style parse: per-100g macros + grams used. */
     @PostMapping("/parse-recipe")
     public ParsedRecipe parseRecipe(@Valid @RequestBody ParseRequest req) {
+        quota.consume(); // after validation: a bad request costs no quota
         return NutritionFiller.fillRecipe(parser.parseRecipe(req.text()));
     }
 }

@@ -7,17 +7,9 @@ import javafx.scene.control.DialogEvent;
 import javafx.stage.Stage;
 
 /**
- * Process-wide holder for the primary JavaFX {@link Stage} plus dialog-prep
- * helpers.
- *
- * <p><b>Why prepareDialog exists.</b> On most Linux window managers (and on
- * some Windows builds) opening any new top-level window causes the WM to
- * un-maximize / exit-fullscreen the existing window, even when the new one
- * has an explicit owner. JavaFX itself doesn't reapply the state because
- * from its point of view "the user resized it". So we install a listener
- * that re-applies the state every time the WM tries to take it away,
- * for as long as the dialog is open. As soon as the dialog closes we
- * remove the listener so the user can resize freely again.
+ * Holds the main {@link Stage} and prepares dialogs. Many window managers
+ * un-maximize the main window when a dialog opens; prepareDialog restores the
+ * maximized / full-screen state while the dialog is open.
  */
 public final class AppContext {
 

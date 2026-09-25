@@ -7,6 +7,9 @@ package com.calorietracker.desktop.model;
  */
 public final class NutritionCalc {
 
+    /** More protein than this per kg of body weight has no extra benefit. */
+    public static final double MAX_PROTEIN_G_PER_KG = 2.2;
+
     private NutritionCalc() {}
 
     // ---------------- core ----------------
@@ -24,11 +27,9 @@ public final class NutritionCalc {
         return (int) Math.round(bmr * multiplier(a));
     }
 
-    public static Integer dailyCalorieTarget(Sex sex, Integer age, Double heightCm, Double weightKg,
-                                             ActivityLevel a, Goal goal, Integer goalPercent) {
-        Integer tdee = tdeeMaintain(sex, age, heightCm, weightKg, a);
-        if (tdee == null || goal == null) return null;
-        int pct = goalPercent == null ? 0 : Math.max(0, Math.min(50, goalPercent));
+    /** TDEE adjusted by the goal percentage (clamped to 0-50), before the BMR floor. */
+    public static int adjusted(int tdee, Goal goal, int goalPercent) {
+        int pct = Math.max(0, Math.min(50, goalPercent));
         double adj = switch (goal) {
             case LOSE -> -pct / 100.0;
             case GAIN -> +pct / 100.0;
@@ -37,14 +38,49 @@ public final class NutritionCalc {
         return (int) Math.round(tdee * (1.0 + adj));
     }
 
+    /** The daily calorie target, never below BMR (the backend enforces the same floor). */
+    public static int target(int tdee, Goal goal, int goalPercent, int bmr) {
+        return Math.max(adjusted(tdee, goal, goalPercent), bmr);
+    }
+
+    /** Whether cutting {@code percent} of TDEE would drop below BMR. */
+    public static boolean belowBmr(int tdee, int bmr, int percent) {
+        return adjusted(tdee, Goal.LOSE, percent) < bmr;
+    }
+
     public record MacroGrams(int protein, int carbs, int fat) {}
 
-    public static MacroGrams macroGrams(int calories, MacroPreset preset) {
+    /**
+     * Macro grams for a calorie target, with protein capped at 2.2 g per kg of
+     * body weight (no cap when the weight is unknown); the calories above the
+     * cap go to carbs and fat in the preset's proportion. Same maths as the
+     * backend's NutritionCalculator.
+     */
+    public static MacroGrams macroGrams(int calories, MacroPreset preset, Double weightKg) {
         if (preset == null) preset = MacroPreset.BALANCED;
-        int protein = (int) Math.round(calories * (preset.proteinPercent / 100.0) / 4.0);
-        int carbs   = (int) Math.round(calories * (preset.carbsPercent   / 100.0) / 4.0);
-        int fat     = (int) Math.round(calories * (preset.fatPercent     / 100.0) / 9.0);
-        return new MacroGrams(protein, carbs, fat);
+        double proteinKcal = calories * preset.proteinPercent / 100.0;
+        double carbsKcal   = calories * preset.carbsPercent   / 100.0;
+        double fatKcal     = calories * preset.fatPercent     / 100.0;
+        if (weightKg != null && weightKg > 0) {
+            double maxProteinKcal = MAX_PROTEIN_G_PER_KG * weightKg * 4.0;
+            if (proteinKcal > maxProteinKcal) {
+                double spare = proteinKcal - maxProteinKcal;
+                int rest = preset.carbsPercent + preset.fatPercent;
+                proteinKcal = maxProteinKcal;
+                carbsKcal += spare * preset.carbsPercent / rest;
+                fatKcal   += spare * preset.fatPercent / rest;
+            }
+        }
+        return new MacroGrams((int) Math.round(proteinKcal / 4.0),
+                (int) Math.round(carbsKcal / 4.0),
+                (int) Math.round(fatKcal / 9.0));
+    }
+
+    /** True when the preset would ask for more protein than 2.2 g/kg. */
+    public static boolean proteinCapped(int calories, MacroPreset preset, Double weightKg) {
+        if (weightKg == null || weightKg <= 0) return false;
+        MacroPreset p = preset == null ? MacroPreset.BALANCED : preset;
+        return calories * p.proteinPercent / 100.0 > MAX_PROTEIN_G_PER_KG * weightKg * 4.0;
     }
 
     private static double multiplier(ActivityLevel a) {

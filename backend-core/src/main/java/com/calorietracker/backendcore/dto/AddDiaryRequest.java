@@ -15,7 +15,7 @@ import java.time.LocalDate;
  * macros (used by the AI "Add all" flow).
  */
 public record AddDiaryRequest(
-        @NotNull @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd") LocalDate date,
+        @NotNull @PlausibleDate @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd") LocalDate date,
         @NotNull Meal meal,
         Long ingredientId,
         @Positive @Max(100_000) Double amountGrams,

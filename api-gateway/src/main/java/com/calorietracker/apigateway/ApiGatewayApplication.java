@@ -6,9 +6,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 /**
  * API Gateway entry point.
  *
- * The single front door for the JavaFX client. It discovers backend services
- * via Eureka and forwards matching requests to them (see routes in
- * application.yml). Cognito JWT validation will be added here in a later step.
+ * The single front door for both clients. It discovers backend services via
+ * Eureka, forwards matching requests to them (see routes in application.yml),
+ * validates every JWT at the edge and adds security headers to each response.
  */
 @SpringBootApplication
 public class ApiGatewayApplication {

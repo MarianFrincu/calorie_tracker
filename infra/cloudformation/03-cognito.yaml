@@ -1,8 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Calorie Tracker - Identity: AWS Cognito user pool with USER/ADMIN groups, a
-  public app client for the JavaFX desktop client (USER_PASSWORD_AUTH), and a
-  confidential client for machine-to-machine (client_credentials) calls.
+  Calorie Tracker - Identity: AWS Cognito user pool (email sign-in, verified
+  email for recovery) and the one public app client shared by the web and
+  desktop apps (SRP sign-in + revocable refresh tokens). The services
+  accept only access tokens issued to this client.
 
 Parameters:
   ProjectName:
@@ -17,66 +18,47 @@ Resources:
       UserPoolName: !Sub '${ProjectName}-pool'
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+      # destroy.sh turns this off first.
+      DeletionProtection: ACTIVE
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: false
+      # Password resets only via the verified email address.
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
       Policies:
         PasswordPolicy:
-          MinimumLength: 8
+          # Mirrored by the clients' live password checklist.
+          MinimumLength: 12
           RequireUppercase: true
           RequireLowercase: true
           RequireNumbers: true
           RequireSymbols: false
+          TemporaryPasswordValidityDays: 3
       Schema:
         - Name: email
           AttributeDataType: String
           Required: true
           Mutable: true
 
-  # Hosted domain - required for the OAuth2 token endpoint (M2M client_credentials).
-  UserPoolDomain:
-    Type: AWS::Cognito::UserPoolDomain
-    Properties:
-      Domain: !Sub '${ProjectName}-${AWS::AccountId}'
-      UserPoolId: !Ref UserPool
-
-  # Resource server defines the M2M scopes.
-  ResourceServer:
-    Type: AWS::Cognito::UserPoolResourceServer
-    Properties:
-      UserPoolId: !Ref UserPool
-      Identifier: calorietracker-api
-      Name: Calorie Tracker API
-      Scopes:
-        - { ScopeName: foods.read,  ScopeDescription: Read food entries }
-        - { ScopeName: foods.write, ScopeDescription: Create/update/delete food entries }
-
-  # Roles are modeled as Cognito groups -> mapped to ROLE_* by the services.
-  UserGroup:
-    Type: AWS::Cognito::UserPoolGroup
-    Properties:
-      GroupName: USER
-      UserPoolId: !Ref UserPool
-      Precedence: 10
-      Description: Regular users (read + AI)
-
-  AdminGroup:
-    Type: AWS::Cognito::UserPoolGroup
-    Properties:
-      GroupName: ADMIN
-      UserPoolId: !Ref UserPool
-      Precedence: 1
-      Description: Administrators (full write access)
-
-  # Public client for the JavaFX desktop app (no secret; direct username/password).
+  # Public client (no secret) shared by the web and desktop apps.
   AppClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
-      ClientName: !Sub '${ProjectName}-desktop'
+      ClientName: !Sub '${ProjectName}-app'
       UserPoolId: !Ref UserPool
       GenerateSecret: false
       ExplicitAuthFlows:
-        - ALLOW_USER_PASSWORD_AUTH
+        # Both apps sign in with SRP: the password never leaves the device.
+        - ALLOW_USER_SRP_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
+        # Needs AWS credentials (AdminInitiateAuth); used by smoke-test.sh.
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+      # Same answers whether or not an email is registered.
+      PreventUserExistenceErrors: ENABLED
+      # Sign-out revokes the refresh token and its access tokens.
+      EnableTokenRevocation: true
+      AuthSessionValidity: 3
       AccessTokenValidity: 60
       IdTokenValidity: 60
       RefreshTokenValidity: 30
@@ -84,21 +66,6 @@ Resources:
         AccessToken: minutes
         IdToken: minutes
         RefreshToken: days
-
-  # Confidential client for machine-to-machine (service-to-service) calls.
-  M2MClient:
-    Type: AWS::Cognito::UserPoolClient
-    DependsOn: ResourceServer
-    Properties:
-      ClientName: !Sub '${ProjectName}-m2m'
-      UserPoolId: !Ref UserPool
-      GenerateSecret: true
-      AllowedOAuthFlowsUserPoolClient: true
-      AllowedOAuthFlows: [client_credentials]
-      AllowedOAuthScopes:
-        - calorietracker-api/foods.read
-        - calorietracker-api/foods.write
-      SupportedIdentityProviders: [COGNITO]
 
 Outputs:
   UserPoolId:
@@ -110,9 +77,3 @@ Outputs:
   AppClientId:
     Value: !Ref AppClient
     Export: { Name: !Sub '${ProjectName}-AppClientId' }
-  M2MClientId:
-    Value: !Ref M2MClient
-  TokenEndpoint:
-    Value: !Sub 'https://${ProjectName}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com/oauth2/token'
-  HostedDomain:
-    Value: !Sub 'https://${ProjectName}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com'

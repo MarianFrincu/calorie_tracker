@@ -1,0 +1,12 @@
+# Tests run with the real (non-dev) security, validating tokens minted by
+# support/TestJwts with the test-only key pair in test-keys/.
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          public-key-location: classpath:test-keys/test-public.pem
+
+calorietracker:
+  security:
+    client-id: test-client

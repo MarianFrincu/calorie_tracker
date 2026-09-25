@@ -35,9 +35,9 @@ public class AppConfig {
 
     public String apiBaseUrl()    { return get("api.base.url", "http://localhost:8080"); }
     public String authMode()      { return get("auth.mode", "none"); }   // none | cognito
-    // No hardcoded region default — scripts/run-ui.sh sets COGNITO_REGION from
-    // your AWS_DEFAULT_REGION, and config.properties is intentionally empty.
-    // An empty region surfaces clearly when the cognito flow tries to use it.
-    public String cognitoRegion() { return get("cognito.region", ""); }
+    // No default — `make desktop-cloud` sets COGNITO_USER_POOL_ID from the deployed
+    // stack, and config.properties is intentionally empty. A missing value
+    // surfaces clearly when the cognito flow tries to use it.
+    public String cognitoUserPoolId() { return get("cognito.user.pool.id", ""); }
     public String cognitoClientId() { return get("cognito.client.id", ""); }
 }

@@ -1,10 +1,7 @@
 server:
   port: 8081
   error:
-    # Don't surface internal exception messages or stack traces in the default
-    # error response (the kind Spring renders when a request doesn't match any
-    # @RestController). The GlobalExceptionHandler still produces friendly
-    # messages for in-app exceptions.
+    # No internals in Spring's default error page (GlobalExceptionHandler writes ours).
     include-message: never
     include-stacktrace: never
     include-binding-errors: never
@@ -13,14 +10,13 @@ spring:
   application:
     name: backend-core
   datasource:
-    # Defaults target a locally-run Postgres; docker-compose overrides the host
-    # to the 'postgres' service via env vars. Nothing is hardcoded for the cloud.
+    # Local defaults; compose and AWS set these through the environment.
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/calorietracker}
     username: ${SPRING_DATASOURCE_USERNAME:calorie}
     password: ${SPRING_DATASOURCE_PASSWORD:calorie}
   jpa:
     hibernate:
-      # Flyway owns the schema; Hibernate only validates the entity mappings match.
+      # Flyway owns the schema; Hibernate only validates it.
       ddl-auto: validate
     show-sql: false
     properties:
@@ -28,22 +24,20 @@ spring:
         format_sql: true
   flyway:
     enabled: true
-    # The pre-existing DB volume already has a 'food_entries' table from the old
-    # demo; baseline-on-migrate lets Flyway take ownership without complaining.
+    # Adopt a database that already has tables but no Flyway history.
     baseline-on-migrate: true
     baseline-version: 0
-  ai:
-    # Chat model auto-config OFF by default so the app boots with NO AWS access.
-    # The 'bedrock' profile turns it back on (see application-bedrock.yml).
-    model:
-      chat: none
 
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+    # Register ~5 s after startup instead of the default 40 s.
+    initial-instance-info-replication-interval-seconds: 5
   instance:
-    # Register by IP so discovery works cleanly inside the Docker network.
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+    # Register by IP (works in Docker and on ECS).
     prefer-ip-address: true
 
 management:
@@ -55,8 +49,13 @@ management:
     health:
       probes:
         enabled: true
+      # Public (health checks), so only UP/DOWN - no internal details.
+      show-details: never
+      show-components: never
 
-# AI provider for the ingredient parser: 'mock' (offline default) or 'bedrock'.
+# Per-user AI quota for every ai-service task (AiQuotaService).
 calorietracker:
   ai:
-    provider: ${CALORIETRACKER_AI_PROVIDER:mock}
+    rate-limit:
+      per-minute: ${CALORIETRACKER_AI_RATE_LIMIT_PER_MINUTE:10}
+      per-day: ${CALORIETRACKER_AI_RATE_LIMIT_PER_DAY:200}

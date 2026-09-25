@@ -1,33 +1,41 @@
 package com.calorietracker.desktop;
 
 import com.calorietracker.desktop.api.ApiClient;
+import com.calorietracker.desktop.api.AuthSession;
 import com.calorietracker.desktop.api.CognitoAuthService;
+import com.calorietracker.desktop.api.CognitoException;
 import com.calorietracker.desktop.model.Profile;
 import com.calorietracker.desktop.ui.AiView;
 import com.calorietracker.desktop.ui.DayView;
 import com.calorietracker.desktop.ui.FoodExplorerView;
 import com.calorietracker.desktop.ui.ObjectiveView;
+import com.calorietracker.desktop.ui.PasswordInput;
+import com.calorietracker.desktop.ui.PasswordRules;
 import com.calorietracker.desktop.ui.ProfileView;
 import com.calorietracker.desktop.ui.RecipesView;
 import com.calorietracker.desktop.ui.ReportsView;
 import com.calorietracker.desktop.ui.WeightView;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.function.Consumer;
 import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Dialog;
+import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
-import javafx.scene.control.PasswordField;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
-import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -47,6 +55,10 @@ public class CalorieTrackerApp extends Application {
 
     private final AppConfig config = new AppConfig();
     private ApiClient api;
+    /** Cognito session; null in auth.mode=none (dev backend without security). */
+    private AuthSession session;
+    /** True while a sign-in dialog is open, so an expiry notice can't stack a second one. */
+    private boolean loginShowing;
     private Stage stage;
     private BorderPane root;
     private VBox sidebar;
@@ -70,21 +82,35 @@ public class CalorieTrackerApp extends Application {
         // initOwner(...) and we can restore maximize/fullscreen after they close.
         AppContext.setMainStage(stage);
 
-        api = new ApiClient(config.apiBaseUrl());
-        if ("cognito".equalsIgnoreCase(config.authMode())) {
-            String saved = com.calorietracker.desktop.api.SessionStore.loadIfValid();
-            if (saved != null) {
-                api.setToken(saved);
-                // Saved token might be revoked / past Cognito's own expiry / on a
-                // server with a different JWK. Probe before showing the UI; on any
-                // failure drop the token and force a fresh login.
-                if (!sessionValid()) {
-                    api.setToken(null);
-                    com.calorietracker.desktop.api.SessionStore.clear();
-                    if (!login()) return;
+        try {
+            if ("cognito".equalsIgnoreCase(config.authMode())) {
+                session = new AuthSession(new CognitoAuthService(
+                        config.cognitoUserPoolId(), config.cognitoClientId()));
+                api = new ApiClient(config.apiBaseUrl(), session);
+            } else {
+                api = new ApiClient(config.apiBaseUrl(), null);
+            }
+        } catch (RuntimeException e) {
+            // Misconfiguration (plain-http URL in cognito mode, bad pool id, missing
+            // client id...): say exactly what is wrong instead of failing later.
+            Alert alert = new Alert(Alert.AlertType.ERROR, e.getMessage());
+            alert.setHeaderText("Calorie Tracker can't start");
+            alert.showAndWait();
+            Platform.exit();
+            return;
+        }
+
+        if (session != null) {
+            api.setOnSessionExpired(() -> Platform.runLater(this::sessionExpired));
+            // Resume the previous launch's session (refreshing it if the access
+            // token has lapsed), then probe it: it may have been revoked or
+            // issued by a different user pool. On any failure, sign in afresh.
+            if (!(session.restore() && sessionValid())) {
+                session.clearLocal();
+                if (!login()) {
+                    Platform.exit();
+                    return;
                 }
-            } else if (!login()) {
-                return;
             }
         }
 
@@ -271,7 +297,10 @@ public class CalorieTrackerApp extends Application {
         swap(2, aiView);
     }
     private void showCompare()   { swap(3, new FoodExplorerView(api)); }
-    private void showProfile()   { swap(4, new ProfileView(api, this::onProfileSaved)); }
+    private void showProfile()   {
+        swap(4, new ProfileView(api, this::onProfileSaved, this::deleteAccountData, this::onAccountDeleted,
+                session != null));
+    }
     private void showObjective() { swap(5, new ObjectiveView(api)); }
     private void showWeight()    { swap(6, new WeightView(api)); }
     private void showReports()   { swap(7, new ReportsView(api)); }
@@ -286,13 +315,31 @@ public class CalorieTrackerApp extends Application {
     }
 
     /**
-     * Drop the cached access token, drop the cached AiView (chat history would
-     * leak across users), and re-show the sign-in dialog. If the user cancels
-     * out of it, close the app.
+     * Revoke the refresh token at Cognito, drop the cached AiView (chat history
+     * would leak across users), and re-show the sign-in dialog. If the user
+     * cancels out of it, close the app.
      */
     private void signOut() {
-        api.setToken(null);
-        com.calorietracker.desktop.api.SessionStore.clear();
+        // Revocation is a network call; don't block the UI on it.
+        AuthSession s = session;
+        Thread revoke = new Thread(s::signOut, "sign-out");
+        revoke.setDaemon(true);
+        revoke.start();
+        showLoginAgain();
+    }
+
+    /** The refresh token was rejected (revoked, expired, user deleted): ask for a password again. */
+    private void sessionExpired() {
+        if (loginShowing || session == null) return;
+        Alert alert = new Alert(Alert.AlertType.INFORMATION, "Your session has expired. Please sign in again.");
+        alert.setHeaderText(null);
+        AppContext.prepareDialog(alert);
+        alert.showAndWait();
+        showLoginAgain();
+    }
+
+    /** Shared tail of sign-out / expiry / account deletion. */
+    private void showLoginAgain() {
         aiView = null;
         // Hide the main window so only the login dialog is visible.
         if (stage != null) stage.hide();
@@ -316,7 +363,7 @@ public class CalorieTrackerApp extends Application {
 
     // ---------------- Cognito sign-in / sign-up ----------------
 
-    private VBox authFieldGroup(String labelText, javafx.scene.control.Control field) {
+    private VBox authFieldGroup(String labelText, Node field) {
         Label l = new Label(labelText);
         l.getStyleClass().add("auth-field-label");
         VBox box = new VBox(6, l, field);
@@ -324,8 +371,59 @@ public class CalorieTrackerApp extends Application {
         return box;
     }
 
+    private static final String RULES_NOT_MET = "The password doesn't meet all the requirements listed under it yet.";
+
+    /**
+     * Runs a network call off the JavaFX thread (Cognito can take seconds) and
+     * delivers the outcome back on it. The UI stays responsive and the caller
+     * disables its buttons meanwhile.
+     */
+    private static <T> void background(Callable<T> work, Consumer<T> onOk, Consumer<Throwable> onError) {
+        Task<T> task = new Task<>() {
+            @Override protected T call() throws Exception { return work.call(); }
+        };
+        task.setOnSucceeded(e -> onOk.accept(task.getValue()));
+        task.setOnFailed(e -> onError.accept(task.getException()));
+        Thread t = new Thread(task, "auth-call");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static Label statusLabel() {
+        Label status = new Label("");
+        status.getStyleClass().add("auth-status");
+        status.setWrapText(true);
+        status.setManaged(false);
+        status.setVisible(false);
+        return status;
+    }
+
+    private static void showStatus(Label status, String msg, boolean isError) {
+        status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
+        status.getStyleClass().add(isError ? "auth-status-error" : "auth-status-ok");
+        status.setText(msg);
+        status.setManaged(true);
+        status.setVisible(true);
+    }
+
+    private static void hideStatus(Label status) {
+        status.setText("");
+        status.setManaged(false);
+        status.setVisible(false);
+        status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
+    }
+
     private boolean login() {
-        CognitoAuthService auth = new CognitoAuthService();
+        loginShowing = true;
+        try {
+            return showLoginDialog();
+        } finally {
+            loginShowing = false;
+        }
+    }
+
+    private boolean showLoginDialog() {
+        CognitoAuthService auth = session.cognito();
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle("Calorie Tracker");
         dialog.getDialogPane().setHeader(null);
@@ -343,23 +441,19 @@ public class CalorieTrackerApp extends Application {
         TextField siEmail = new TextField();
         siEmail.setPromptText("you@example.com");
         siEmail.getStyleClass().add("auth-field");
-        PasswordField siPwd = new PasswordField();
-        siPwd.setPromptText("password");
-        siPwd.getStyleClass().add("auth-field");
+        PasswordInput siPwd = new PasswordInput("password");
+        Hyperlink forgot = new Hyperlink("Forgot password?");
         VBox signInBox = new VBox(14,
                 authFieldGroup("Email", siEmail),
-                authFieldGroup("Password", siPwd));
+                authFieldGroup("Password", siPwd),
+                forgot);
         signInBox.getStyleClass().add("auth-form");
 
         TextField suEmail = new TextField();
         suEmail.setPromptText("you@example.com");
         suEmail.getStyleClass().add("auth-field");
-        PasswordField suPwd = new PasswordField();
-        suPwd.setPromptText("min 8 chars, 1 uppercase, 1 number");
-        suPwd.getStyleClass().add("auth-field");
-        PasswordField suPwd2 = new PasswordField();
-        suPwd2.setPromptText("repeat the password");
-        suPwd2.getStyleClass().add("auth-field");
+        PasswordInput suPwd = new PasswordInput("choose a password");
+        PasswordInput suPwd2 = new PasswordInput("repeat the password");
         Label suHint = new Label("We'll email a 6-digit code to confirm your address. "
                 + "Enter it on the next screen, then come back to sign in.");
         suHint.setWrapText(true);
@@ -368,6 +462,7 @@ public class CalorieTrackerApp extends Application {
                 authFieldGroup("Email", suEmail),
                 authFieldGroup("Password", suPwd),
                 authFieldGroup("Confirm password", suPwd2),
+                new PasswordRules(suPwd.textProperty(), suPwd2.textProperty()),
                 suHint);
         signUpBox.getStyleClass().add("auth-form");
 
@@ -377,11 +472,7 @@ public class CalorieTrackerApp extends Application {
         tabs.getStyleClass().add("auth-tabs");
         tabs.getTabs().forEach(t -> t.setClosable(false));
 
-        Label status = new Label("");
-        status.getStyleClass().add("auth-status");
-        status.setWrapText(true);
-        status.setManaged(false);
-        status.setVisible(false);
+        Label status = statusLabel();
 
         VBox content = new VBox(14, heroBox, tabs, status);
         content.getStyleClass().add("auth-root");
@@ -393,20 +484,7 @@ public class CalorieTrackerApp extends Application {
         dialog.getDialogPane().getStyleClass().add("auth-pane");
         dialog.getDialogPane().getStylesheets().add(getClass().getResource("/app.css").toExternalForm());
 
-        Runnable clearStatus = () -> {
-            status.setText("");
-            status.setManaged(false);
-            status.setVisible(false);
-            status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
-        };
-        java.util.function.BiConsumer<String, Boolean> setStatus = (msg, isError) -> {
-            status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
-            status.getStyleClass().add(isError ? "auth-status-error" : "auth-status-ok");
-            status.setText(msg);
-            status.setManaged(true);
-            status.setVisible(true);
-        };
-
+        Runnable clearStatus = () -> hideStatus(status);
         tabs.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> clearStatus.run());
         siEmail.textProperty().addListener((o, a, b) -> clearStatus.run());
         siPwd.textProperty().addListener((o, a, b) -> clearStatus.run());
@@ -415,63 +493,87 @@ public class CalorieTrackerApp extends Application {
         suPwd2.textProperty().addListener((o, a, b) -> clearStatus.run());
 
         final boolean[] signedIn = {false};
-
         Button submitBtn = (Button) dialog.getDialogPane().lookupButton(submit);
-        submitBtn.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
-            if (tabs.getSelectionModel().getSelectedIndex() == 1) {
-                ev.consume();
-                String email = suEmail.getText().trim();
-                String pwd = suPwd.getText();
-                String pwd2 = suPwd2.getText();
-                if (email.isBlank() || pwd.isBlank()) {
-                    setStatus.accept("Email and password are required.", true);
-                    return;
-                }
-                if (!pwd.equals(pwd2)) {
-                    setStatus.accept("Passwords don't match.", true);
-                    return;
-                }
-                try {
-                    auth.signUp(config.cognitoRegion(), config.cognitoClientId(), email, pwd);
-                } catch (Exception e) {
-                    setStatus.accept("Registration failed. "
-                            + com.calorietracker.desktop.ui.Messages.friendly(e), true);
-                    return;
-                }
-                boolean confirmed = promptVerifyCode(dialog, auth, email);
-                if (confirmed) {
-                    siEmail.setText(email);
-                    siPwd.clear();
-                    tabs.getSelectionModel().select(signInTab);
-                    setStatus.accept("Account confirmed — sign in with your password.", false);
-                    siPwd.requestFocus();
-                }
-            } else {
-                ev.consume();
-                String email = siEmail.getText().trim();
-                String pwd = siPwd.getText();
-                if (email.isBlank() || pwd.isBlank()) {
-                    setStatus.accept("Email and password are required.", true);
-                    return;
-                }
-                try {
-                    String token = auth.login(config.cognitoRegion(), config.cognitoClientId(), email, pwd);
-                    if (token == null || token.isBlank()) {
-                        throw new RuntimeException("No access token returned");
-                    }
-                    api.setToken(token);
-                    com.calorietracker.desktop.api.SessionStore.save(token);
-                    signedIn[0] = true;
-                    dialog.setResult(submit);
-                    dialog.close();
-                } catch (Exception e) {
-                    setStatus.accept("Sign-in failed. "
-                            + com.calorietracker.desktop.ui.Messages.friendly(e), true);
-                }
+
+        forgot.setOnAction(e -> {
+            String email = promptResetPassword(dialog, auth, siEmail.getText().trim());
+            if (email != null) {
+                siEmail.setText(email);
+                siPwd.clear();
+                showStatus(status, "Password changed — sign in with the new one.", false);
+                siPwd.requestFocus();
             }
         });
 
-        javafx.application.Platform.runLater(siEmail::requestFocus);
+        submitBtn.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
+            // Every path handles closing itself once the (async) call returns.
+            ev.consume();
+            if (tabs.getSelectionModel().getSelectedIndex() == 1) {
+                String email = suEmail.getText().trim();
+                String pwd = suPwd.getText();
+                if (email.isBlank() || pwd.isBlank()) {
+                    showStatus(status, "Email and password are required.", true);
+                    return;
+                }
+                if (!PasswordRules.meetsAll(pwd)) {
+                    showStatus(status, RULES_NOT_MET, true);
+                    return;
+                }
+                if (!pwd.equals(suPwd2.getText())) {
+                    showStatus(status, "The two passwords don't match.", true);
+                    return;
+                }
+                submitBtn.setDisable(true);
+                background(() -> { auth.signUp(email, pwd); return null; }, ignored -> {
+                    submitBtn.setDisable(false);
+                    suPwd.clear();
+                    suPwd2.clear();
+                    if (promptVerifyCode(dialog, auth, email)) {
+                        siEmail.setText(email);
+                        siPwd.clear();
+                        tabs.getSelectionModel().select(signInTab);
+                        showStatus(status, "Account confirmed — sign in with your password.", false);
+                        siPwd.requestFocus();
+                    }
+                }, err -> {
+                    submitBtn.setDisable(false);
+                    showStatus(status, com.calorietracker.desktop.ui.Messages.friendly(err), true);
+                });
+            } else {
+                String email = siEmail.getText().trim();
+                String pwd = siPwd.getText();
+                if (email.isBlank() || pwd.isBlank()) {
+                    showStatus(status, "Email and password are required.", true);
+                    return;
+                }
+                submitBtn.setDisable(true);
+                showStatus(status, "Signing in…", false);
+                background(() -> auth.login(email, pwd), tokens -> {
+                    siPwd.clear(); // don't keep the password in a live control
+                    session.signedIn(tokens);
+                    signedIn[0] = true;
+                    dialog.setResult(submit);
+                    dialog.close();
+                }, err -> {
+                    submitBtn.setDisable(false);
+                    if (err instanceof CognitoException ce && "UserNotConfirmedException".equals(ce.type())) {
+                        // Signed up but never entered the code: send a fresh one and ask for it.
+                        showStatus(status, "Your email isn't confirmed yet. We've sent you a new code.", false);
+                        background(() -> { auth.resendCode(email); return null; }, ignored -> {
+                            if (promptVerifyCode(dialog, auth, email)) {
+                                showStatus(status, "Account confirmed — sign in with your password.", false);
+                                siPwd.requestFocus();
+                            }
+                        }, resendErr -> showStatus(status,
+                                com.calorietracker.desktop.ui.Messages.friendly(resendErr), true));
+                        return;
+                    }
+                    showStatus(status, com.calorietracker.desktop.ui.Messages.friendly(err), true);
+                });
+            }
+        });
+
+        Platform.runLater(siEmail::requestFocus);
         AppContext.prepareDialog(dialog);
         dialog.showAndWait();
         return signedIn[0];
@@ -483,7 +585,7 @@ public class CalorieTrackerApp extends Application {
      * accepted the code, false otherwise.
      */
     private boolean promptVerifyCode(Dialog<?> parent, CognitoAuthService auth, String email) {
-        TextInputDialog codeDialog = new TextInputDialog();
+        Dialog<ButtonType> codeDialog = new Dialog<>();
         codeDialog.setTitle("Verify your email");
         codeDialog.getDialogPane().setHeader(null);
         codeDialog.setHeaderText(null);
@@ -496,61 +598,207 @@ public class CalorieTrackerApp extends Application {
         VBox hero = new VBox(2, brand, tagline);
         hero.getStyleClass().add("auth-hero");
 
-        TextField codeField = codeDialog.getEditor();
+        TextField codeField = new TextField();
         codeField.setPromptText("123456");
         codeField.getStyleClass().add("auth-field");
         VBox codeGroup = authFieldGroup("Verification code", codeField);
+        Hyperlink resend = new Hyperlink("Resend code");
 
-        Label status = new Label("");
-        status.getStyleClass().add("auth-status");
-        status.setWrapText(true);
-        status.setManaged(false);
-        status.setVisible(false);
+        Label status = statusLabel();
 
-        VBox body = new VBox(14, hero, codeGroup, status);
+        VBox body = new VBox(14, hero, codeGroup, resend, status);
         body.getStyleClass().add("auth-root");
         body.setPrefWidth(380);
 
         codeDialog.getDialogPane().setContent(body);
+        codeDialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
         codeDialog.getDialogPane().getStyleClass().add("auth-pane");
         codeDialog.getDialogPane().getStylesheets().add(getClass().getResource("/app.css").toExternalForm());
+        ownBy(codeDialog, parent);
 
-        try {
-            codeDialog.initOwner(parent.getDialogPane().getScene().getWindow());
-            codeDialog.initModality(javafx.stage.Modality.WINDOW_MODAL);
-        } catch (Exception ignored) { /* parent not shown yet — leave defaults */ }
+        resend.setOnAction(e -> {
+            resend.setDisable(true);
+            background(() -> { auth.resendCode(email); return null; }, ignored -> {
+                resend.setDisable(false);
+                showStatus(status, "A new code is on its way.", false);
+            }, err -> {
+                resend.setDisable(false);
+                showStatus(status, com.calorietracker.desktop.ui.Messages.friendly(err), true);
+            });
+        });
 
         final boolean[] confirmed = {false};
         Button okBtn = (Button) codeDialog.getDialogPane().lookupButton(ButtonType.OK);
         okBtn.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
+            ev.consume();
             String code = codeField.getText().trim();
             if (code.isBlank()) {
-                ev.consume();
-                status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
-                status.getStyleClass().add("auth-status-error");
-                status.setText("Enter the code from the email.");
-                status.setManaged(true);
-                status.setVisible(true);
+                showStatus(status, "Enter the code from the email.", true);
                 return;
             }
-            try {
-                auth.confirmSignUp(config.cognitoRegion(), config.cognitoClientId(), email, code);
+            okBtn.setDisable(true);
+            background(() -> { auth.confirmSignUp(email, code); return null; }, ignored -> {
                 confirmed[0] = true;
-            } catch (Exception e) {
-                ev.consume();
-                status.getStyleClass().removeAll("auth-status-error", "auth-status-ok");
-                status.getStyleClass().add("auth-status-error");
-                status.setText("Verification failed. "
-                        + com.calorietracker.desktop.ui.Messages.friendly(e));
-                status.setManaged(true);
-                status.setVisible(true);
-            }
+                codeDialog.setResult(ButtonType.OK);
+                codeDialog.close();
+            }, err -> {
+                okBtn.setDisable(false);
+                showStatus(status, com.calorietracker.desktop.ui.Messages.friendly(err), true);
+            });
         });
 
-        javafx.application.Platform.runLater(codeField::requestFocus);
+        Platform.runLater(codeField::requestFocus);
         codeDialog.showAndWait();
         return confirmed[0];
     }
 
+    /**
+     * Two-step forgot-password flow: request a code by email, then set a new
+     * password with it.
+     *
+     * @return the email whose password was changed, or null if cancelled
+     */
+    private String promptResetPassword(Dialog<?> parent, CognitoAuthService auth, String prefillEmail) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Reset password");
+        dialog.getDialogPane().setHeader(null);
+        dialog.setHeaderText(null);
+        dialog.setGraphic(null);
 
+        Label brand = new Label("Reset your password");
+        brand.getStyleClass().add("auth-brand");
+        Label tagline = new Label("We'll email you a code to set a new password.");
+        tagline.getStyleClass().add("auth-tagline");
+        tagline.setWrapText(true);
+        VBox hero = new VBox(2, brand, tagline);
+        hero.getStyleClass().add("auth-hero");
+
+        TextField email = new TextField(prefillEmail);
+        email.setPromptText("you@example.com");
+        email.getStyleClass().add("auth-field");
+        TextField code = new TextField();
+        code.setPromptText("123456");
+        code.getStyleClass().add("auth-field");
+        PasswordInput pwd = new PasswordInput("choose a new password");
+        PasswordInput pwd2 = new PasswordInput("repeat the password");
+
+        VBox requestStep = new VBox(14, authFieldGroup("Email", email));
+        VBox confirmStep = new VBox(14,
+                authFieldGroup("Reset code", code),
+                authFieldGroup("New password", pwd),
+                authFieldGroup("Confirm new password", pwd2),
+                new PasswordRules(pwd.textProperty(), pwd2.textProperty()));
+        confirmStep.setVisible(false);
+        confirmStep.setManaged(false);
+        Label status = statusLabel();
+
+        VBox body = new VBox(14, hero, requestStep, confirmStep, status);
+        body.getStyleClass().add("auth-root");
+        body.setPrefWidth(400);
+
+        ButtonType next = new ButtonType("Send code", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().setContent(body);
+        dialog.getDialogPane().getButtonTypes().addAll(next, ButtonType.CANCEL);
+        dialog.getDialogPane().getStyleClass().add("auth-pane");
+        dialog.getDialogPane().getStylesheets().add(getClass().getResource("/app.css").toExternalForm());
+        ownBy(dialog, parent);
+
+        final String[] changedFor = {null};
+        final boolean[] codeSent = {false};
+        Button nextBtn = (Button) dialog.getDialogPane().lookupButton(next);
+        nextBtn.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
+            ev.consume();
+            String address = email.getText().trim();
+            if (!codeSent[0]) {
+                if (address.isBlank()) {
+                    showStatus(status, "Enter the email you registered with.", true);
+                    return;
+                }
+                nextBtn.setDisable(true);
+                background(() -> { auth.forgotPassword(address); return null; }, ignored -> {
+                    codeSent[0] = true;
+                    email.setDisable(true);
+                    confirmStep.setVisible(true);
+                    confirmStep.setManaged(true);
+                    tagline.setText("Enter the code sent to " + address + " and choose a new password.");
+                    nextBtn.setText("Set new password");
+                    nextBtn.setDisable(false);
+                    showStatus(status, "If that address has an account, a reset code is on its way.", false);
+                    dialog.getDialogPane().getScene().getWindow().sizeToScene();
+                    code.requestFocus();
+                }, err -> {
+                    nextBtn.setDisable(false);
+                    showStatus(status, com.calorietracker.desktop.ui.Messages.friendly(err), true);
+                });
+                return;
+            }
+            if (code.getText().isBlank() || pwd.getText().isEmpty()) {
+                showStatus(status, "Enter the code and a new password.", true);
+                return;
+            }
+            if (!PasswordRules.meetsAll(pwd.getText())) {
+                showStatus(status, RULES_NOT_MET, true);
+                return;
+            }
+            if (!pwd.getText().equals(pwd2.getText())) {
+                showStatus(status, "The two passwords don't match.", true);
+                return;
+            }
+            String newPwd = pwd.getText();
+            String theCode = code.getText().trim();
+            nextBtn.setDisable(true);
+            background(() -> { auth.confirmForgotPassword(address, theCode, newPwd); return null; }, ignored -> {
+                pwd.clear();
+                pwd2.clear();
+                changedFor[0] = address;
+                dialog.setResult(next);
+                dialog.close();
+            }, err -> {
+                nextBtn.setDisable(false);
+                showStatus(status, com.calorietracker.desktop.ui.Messages.friendly(err), true);
+            });
+        });
+
+        Platform.runLater(email::requestFocus);
+        dialog.showAndWait();
+        return changedFor[0];
+    }
+
+    private static void ownBy(Dialog<?> child, Dialog<?> parent) {
+        try {
+            child.initOwner(parent.getDialogPane().getScene().getWindow());
+            child.initModality(javafx.stage.Modality.WINDOW_MODAL);
+        } catch (Exception ignored) { /* parent not shown yet — leave defaults */ }
+    }
+
+    // ---------------- Account deletion ----------------
+
+    /**
+     * Runs on a background thread (ProfileView calls it via Async). Server data
+     * first: if the Cognito identity went first and the data delete then
+     * failed, the user could never sign in again to retry.
+     */
+    private Void deleteAccountData() throws Exception {
+        api.deleteProfile();
+        if (session != null) {
+            String token = session.accessToken();
+            if (token != null) session.cognito().deleteUser(token);
+            session.clearLocal();
+        }
+        return null;
+    }
+
+    /** Back on the FX thread after a successful deletion. */
+    private void onAccountDeleted() {
+        if (session != null) {
+            showLoginAgain();
+            return;
+        }
+        // Dev mode: the backend recreates an empty dev-user; restart onboarding.
+        aiView = null;
+        onboardingLock = true;
+        sidebar = buildSidebar();
+        root.setLeft(sidebar);
+        showProfile();
+    }
 }

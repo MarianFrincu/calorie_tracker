@@ -8,11 +8,10 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
- * LOCAL DEVELOPMENT ONLY ('dev' profile): disables authentication so the JavaFX
- * desktop client can be run against the local stack without obtaining tokens.
+ * LOCAL DEVELOPMENT ONLY ('dev' profile): disables authentication so the local
+ * web and desktop clients work without signing in (every call is 'dev-user').
  *
- * The real security ({@link SecurityConfig}) is active for every other profile
- * (localjwt, cognito).
+ * The real security ({@link SecurityConfig}) is active for every other profile.
  */
 @Configuration
 @EnableWebSecurity

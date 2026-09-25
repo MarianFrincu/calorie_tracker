@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Size;
 /**
  * Inbound payload for the AI ingredient parser: a free-text meal description.
  * <p>
- * The size cap is a cost + DoS guard: with the Bedrock provider, every char
+ * The size cap is a cost + DoS guard: with the Gemini provider, every char
  * eventually becomes input tokens billed by the model. 2 KB is comfortably
  * larger than any realistic meal description.
  */

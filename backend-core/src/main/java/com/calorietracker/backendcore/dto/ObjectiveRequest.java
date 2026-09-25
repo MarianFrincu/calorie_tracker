@@ -16,7 +16,7 @@ public record ObjectiveRequest(
         Goal goal,
         @Min(0) @Max(50) Integer goalPercent,
         MacroPreset macroPreset,
-        @Positive Integer dailyFiberTargetG,
-        @Positive Integer dailyWaterTargetMl
+        @Positive @Max(200) Integer dailyFiberTargetG,
+        @Positive @Max(10_000) Integer dailyWaterTargetMl
 ) {
 }

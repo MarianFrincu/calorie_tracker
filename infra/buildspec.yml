@@ -1,78 +1,88 @@
-# Reference CodeBuild buildspec. The pipeline in 05-cicd.yaml uses an inline
-# copy of this. Keep them in sync.
-#
-# Behavior:
-#   1. Diff HEAD against HEAD~1 to figure out which backend service directories
-#      changed. README / c_t_docs / desktop-client changes => no backend build.
-#   2. If a buildspec or pipeline template change is detected, rebuild EVERYTHING
-#      (so the new flow takes effect on this commit).
-#   3. For each service in the rebuild list: `mvn test` -> `docker build/push` ->
-#      `ecs update-service --force-new-deployment`.
-#   4. If nothing relevant changed, the pipeline run is essentially a no-op.
-#
-# Expects env vars: AWS_DEFAULT_REGION, ACCOUNT_ID, PROJECT, ECR.
+# CI/CD steps (pipeline: infra/cloudformation/05-cicd.yaml). Every push except
+# docs-only commits: 1. all tests  2. the app in Docker + browser tests
+# 3. push images  4. roll ECS, wait, smoke-test the live URL.
+# A failing step stops the run; nothing deploys unless 1-3 passed.
 
 version: 0.2
+env:
+  variables:
+    E2E_BASE_URL: http://localhost:8088
+cache:
+  paths:
+    - '/root/.m2/**/*'
 phases:
   install:
     runtime-versions:
       java: corretto21
+    commands:
+      - docker compose version || (mkdir -p ~/.docker/cli-plugins && curl -fsSL -o ~/.docker/cli-plugins/docker-compose https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 && chmod +x ~/.docker/cli-plugins/docker-compose && docker compose version)
   pre_build:
     commands:
       - |
-        echo "Detecting which backend services changed..."
-        if git rev-parse HEAD~1 >/dev/null 2>&1; then
-          CHANGED=$(git diff --name-only HEAD~1 HEAD)
-        else
-          CHANGED="eureka-server/ api-gateway/ backend-core/ ai-service/"
+        # Docs-only commits (Markdown, screenshots) skip the whole run.
+        if git rev-parse HEAD~1 >/dev/null 2>&1 \
+           && ! git diff --name-only HEAD~1 HEAD | grep -qvE '\.md$|^docs/'; then
+          echo "==> Only documentation changed - nothing to build."
+          touch /tmp/skip
         fi
-        echo "Changed files:"
-        echo "$CHANGED"
-        > /tmp/services_to_build
-        for svc in eureka-server api-gateway backend-core ai-service; do
-          if echo "$CHANGED" | grep -qE "^${svc}/"; then
-            echo "$svc" >> /tmp/services_to_build
-          fi
-        done
-        if echo "$CHANGED" | grep -qE "^(infra/buildspec|infra/cloudformation/05-cicd)"; then
-          printf 'eureka-server\napi-gateway\nbackend-core\nai-service\n' > /tmp/services_to_build
-        fi
-        if [ ! -s /tmp/services_to_build ]; then
-          echo "==> No backend source changed (likely docs / infra only). Skipping build."
-          touch /tmp/skip_build
-        else
-          echo "==> Will rebuild:"; cat /tmp/services_to_build
-        fi
-      - |
-        if [ -f /tmp/skip_build ]; then exit 0; fi
-        echo "Running mvn test on services to rebuild..."
-        for svc in $(cat /tmp/services_to_build); do
-          echo "── Testing ${svc} ──"
-          (cd $svc && mvn -B -q test)
-        done
-      - |
-        if [ -f /tmp/skip_build ]; then exit 0; fi
-        aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR
+      - '[ -f /tmp/skip ] || aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR'
   build:
     commands:
       - |
-        if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
-        for svc in $(cat /tmp/services_to_build); do
-          echo "── Building ${svc} ──"
-          docker build --platform linux/amd64 -t $ECR/$PROJECT-$svc:latest ./$svc
-          docker push $ECR/$PROJECT-$svc:latest
+        if [ -f /tmp/skip ]; then exit 0; fi
+        set -e
+        echo "==> 1/4 Unit + integration tests (backend-core runs against a real PostgreSQL)"
+        for m in eureka-server api-gateway ai-service backend-core desktop-client; do
+          echo "── ${m} ──"
+          (cd "$m" && mvn -B -q clean verify)
+        done
+      - |
+        if [ -f /tmp/skip ]; then exit 0; fi
+        set -e
+        echo "==> 2/4 Whole app in Docker + browser tests of every feature (desktop + phone)"
+        docker compose build
+        docker compose up -d --wait
+        PW=$(python3 -c "import json;print(json.load(open('web-client/package-lock.json'))['packages']['node_modules/@playwright/test']['version'])")
+        docker run --rm --network host -e E2E_BASE_URL -e E2E_ALLOW_DELETE=1 \
+          -v "$PWD/web-client:/w" -w /w "mcr.microsoft.com/playwright:v${PW}-noble" \
+          sh -c 'npm ci --no-audit --no-fund --silent && npx playwright test --output /tmp/pw' \
+          || { docker compose logs --tail=200; exit 1; }
+        docker compose down -v
+      - |
+        if [ -f /tmp/skip ]; then exit 0; fi
+        set -e
+        echo "==> 3/4 Build + push the cloud images"
+        SHA=$(git rev-parse --short=12 HEAD)
+        CLIENT_ID=$(aws cloudformation describe-stacks --stack-name "$PROJECT-cognito" \
+          --query "Stacks[0].Outputs[?OutputKey=='AppClientId'].OutputValue" --output text)
+        POOL_ID=$(aws cloudformation describe-stacks --stack-name "$PROJECT-cognito" \
+          --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
+        # The cloud web image has sign-in (the test build doesn't).
+        docker build -t calorietracker/web-client:cloud \
+          --build-arg VITE_AUTH_MODE=cognito \
+          --build-arg VITE_COGNITO_USER_POOL_ID=$POOL_ID \
+          --build-arg VITE_COGNITO_CLIENT_ID=$CLIENT_ID ./web-client
+        for svc in eureka-server api-gateway backend-core ai-service web-client; do
+          SRC=calorietracker/$svc:local
+          [ "$svc" = web-client ] && SRC=calorietracker/web-client:cloud
+          for tag in latest "$SHA"; do
+            docker tag "$SRC" "$ECR/$PROJECT-$svc:$tag"
+            docker push -q "$ECR/$PROJECT-$svc:$tag"
+          done
         done
   post_build:
     commands:
       - |
-        if [ -f /tmp/skip_build ]; then echo "Skipped (no changes)."; exit 0; fi
-        for svc in $(cat /tmp/services_to_build); do
-          case "$svc" in
-            eureka-server) ecs_svc="$PROJECT-eureka" ;;
-            api-gateway)   ecs_svc="$PROJECT-gateway" ;;
-            backend-core)  ecs_svc="$PROJECT-core" ;;
-            ai-service)    ecs_svc="$PROJECT-ai" ;;
-          esac
-          echo "── Redeploying ${ecs_svc} ──"
-          aws ecs update-service --cluster $PROJECT-cluster --service "$ecs_svc" --force-new-deployment
+        # post_build runs even when build failed: only deploy what passed.
+        if [ -f /tmp/skip ] || [ "$CODEBUILD_BUILD_SUCCEEDING" != "1" ]; then exit 0; fi
+        set -e
+        echo "==> 4/4 Deploy to ECS, wait until stable, then test the live app"
+        SERVICES="$PROJECT-eureka-a $PROJECT-eureka-b $PROJECT-gateway $PROJECT-core $PROJECT-ai $PROJECT-web"
+        for s in $SERVICES; do
+          aws ecs update-service --cluster "$PROJECT-cluster" --service "$s" --force-new-deployment >/dev/null
         done
+        # Up to 20 minutes (the waiter gives up after 10).
+        aws ecs wait services-stable --cluster "$PROJECT-cluster" --services $SERVICES \
+          || aws ecs wait services-stable --cluster "$PROJECT-cluster" --services $SERVICES
+        sleep 30   # let Eureka propagate the new instances to the gateway
+        ./scripts/smoke-test.sh

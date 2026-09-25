@@ -9,7 +9,7 @@ import org.springframework.security.web.server.SecurityWebFilterChain;
 
 /**
  * LOCAL DEVELOPMENT ONLY ('dev' profile): the gateway lets all traffic through
- * so the desktop client works without tokens. Real security ({@link SecurityConfig})
+ * so the local web and desktop clients work without signing in. Real security ({@link SecurityConfig})
  * is active for every other profile.
  */
 @Configuration

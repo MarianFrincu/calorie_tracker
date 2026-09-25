@@ -1,22 +1,19 @@
-# Local orchestration for the Calorie Tracker platform.
-# Boot order is enforced via healthchecks + depends_on so the first run is clean:
-#   postgres -> eureka-server -> (backend-core, api-gateway)
-#
-# Everything environment-specific is injected here, so the same images run
-# unchanged on AWS ECS/Fargate (where these env vars come from Secrets Manager).
+# The whole app locally: `make up` → http://localhost:8088 (API on :8080).
+# Spring profile `dev`: no sign-in, every request is 'dev-user'. The same
+# images run on AWS with the `cognito` profile (infra/cloudformation/04-app.yaml).
+# Ports are bound to 127.0.0.1 only: no auth and a known DB password.
 
 services:
   postgres:
-    image: postgres:16-alpine
-    container_name: ct-postgres
+    # ECR Public mirror of Docker Hub: no pull rate limits.
+    image: public.ecr.aws/docker/library/postgres:16-alpine
     environment:
       POSTGRES_DB: calorietracker
       POSTGRES_USER: calorie
       POSTGRES_PASSWORD: calorie
     ports:
-      # Host port 15432 to avoid clashing with a local Postgres on 5432.
-      # Inside the docker network, services still reach it as postgres:5432.
-      - "15432:5432"
+      # 15432 on the host, so a local PostgreSQL on 5432 doesn't clash.
+      - "127.0.0.1:15432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -30,9 +27,8 @@ services:
   eureka-server:
     build: ./eureka-server
     image: calorietracker/eureka-server:local
-    container_name: ct-eureka
     ports:
-      - "8761:8761"
+      - "127.0.0.1:8761:8761"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8761/actuator/health | grep -q UP || exit 1"]
       interval: 10s
@@ -45,15 +41,15 @@ services:
   backend-core:
     build: ./backend-core
     image: calorietracker/backend-core:local
-    container_name: ct-backend-core
     environment:
-      SPRING_PROFILES_ACTIVE: localjwt
+      SPRING_PROFILES_ACTIVE: dev
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/calorietracker
       SPRING_DATASOURCE_USERNAME: calorie
       SPRING_DATASOURCE_PASSWORD: calorie
-    ports:
-      - "8081:8081"
+      # Per-user AI quota (enforced here, for every ai-service).
+      CALORIETRACKER_AI_RATE_LIMIT_PER_MINUTE: ${AI_RATE_LIMIT_PER_MINUTE:-10}
+      CALORIETRACKER_AI_RATE_LIMIT_PER_DAY: ${AI_RATE_LIMIT_PER_DAY:-200}
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,23 +67,20 @@ services:
   ai-service:
     build: ./ai-service
     image: calorietracker/ai-service:local
-    container_name: ct-ai-service
     environment:
-      SPRING_PROFILES_ACTIVE: localjwt
+      SPRING_PROFILES_ACTIVE: dev
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
-      # Optional AI provider override (defaults to 'mock' so the stack works
-      # offline). Set CALORIETRACKER_AI_PROVIDER + the matching env var in
-      # your shell before running `docker compose up`:
-      #   mock     — no env vars needed
-      #   bedrock  — requires AWS creds + AWS_REGION (Spring AI auto-config)
-      #   gemini   — requires GEMINI_API_KEY (and optionally GEMINI_MODEL)
-      CALORIETRACKER_AI_PROVIDER: ${CALORIETRACKER_AI_PROVIDER:-mock}
+      # library (default) | gemini (make up picks it when .envrc has a key) | mock (tests)
+      CALORIETRACKER_AI_PROVIDER: ${CALORIETRACKER_AI_PROVIDER:-library}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
-    ports:
-      - "8082:8082"
+      # The fallback model is tried when the first is busy or out of quota.
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_FALLBACK_MODEL: ${GEMINI_FALLBACK_MODEL:-gemini-3.1-flash-lite}
     depends_on:
       eureka-server:
+        condition: service_healthy
+      # Every AI call checks the quota on backend-core.
+      backend-core:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8082/actuator/health | grep -q UP || exit 1"]
@@ -101,12 +94,11 @@ services:
   api-gateway:
     build: ./api-gateway
     image: calorietracker/api-gateway:local
-    container_name: ct-api-gateway
     environment:
-      SPRING_PROFILES_ACTIVE: localjwt
+      SPRING_PROFILES_ACTIVE: dev
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       eureka-server:
         condition: service_healthy
@@ -116,6 +108,23 @@ services:
       timeout: 5s
       retries: 15
       start_period: 40s
+    networks:
+      - ct-net
+
+  # nginx serves the app and proxies /api to the gateway (one origin).
+  web-client:
+    build:
+      context: ./web-client
+      args:
+        VITE_AUTH_MODE: none
+    image: calorietracker/web-client:local
+    environment:
+      API_UPSTREAM: http://api-gateway:8080
+    ports:
+      - "127.0.0.1:8088:8080"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
     networks:
       - ct-net
 
