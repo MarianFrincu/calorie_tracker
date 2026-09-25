@@ -8,6 +8,11 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
+# The account of the credentials in use - looked up first so .envrc can use
+# ${ACCOUNT_ID} (e.g. in GH_CONN_ARN), and never taken from .envrc itself.
+LIVE_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+ACCOUNT_ID="${LIVE_ACCOUNT_ID}"
+
 if [ -f "${REPO_ROOT}/.envrc" ]; then
   # shellcheck disable=SC1090,SC1091
   source "${REPO_ROOT}/.envrc"
@@ -48,8 +53,7 @@ export GH_BRANCH="${GH_BRANCH:-main}"                  # CI/CD only with GH_CONN
 export SERVICES_ALL="eureka-server api-gateway backend-core ai-service web-client"
 
 # ── Derived ───────────────────────────────────────────────────────────────────
-# Always the account of the credentials in use, never a value from .envrc.
-ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+ACCOUNT_ID="${LIVE_ACCOUNT_ID}"
 export ACCOUNT_ID
 export ECR="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 
